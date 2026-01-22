@@ -1,0 +1,43 @@
+# Custom Mutations Configuration
+# ================================
+# This file configures mutation weights for both built-in and custom mutations.
+# Weights are relative (they get normalized), so you can use any scale.
+# Set a weight to 0.0 to disable that mutation.
+
+# ------------------------------------------------------------------------------
+# BUILT-IN MUTATION WEIGHTS (PySR defaults)
+# ------------------------------------------------------------------------------
+# These are the standard PySR mutations. Adjust these for hyperparameter tuning.
+
+[builtin_weights]
+mutate_constant = 0.0353      # Randomly perturb a constant's value
+mutate_operator = 3.63        # Change one operator to another (e.g., + to *)
+mutate_feature = 0.1          # Change which input variable a leaf references
+swap_operands = 0.00608       # Swap left/right children of a binary operator
+rotate_tree = 1.42            # Tree rotation (restructure without changing semantics)
+add_node = 0.0771             # Append/prepend a random operator to a leaf
+insert_node = 2.44            # Insert an operator at a random position
+delete_node = 0.369           # Remove a random operator, keeping one child
+simplify = 0.00148            # Algebraic simplification (e.g., x*1 -> x)
+randomize = 0.00695           # Replace tree with a completely random one
+do_nothing = 0.431            # Keep tree unchanged (helps with selection pressure)
+optimize = 0.0                # Run constant optimization (expensive)
+form_connection = 0.5         # [GraphNode only] Create shared subexpression
+break_connection = 0.1        # [GraphNode only] Break shared subexpression
+
+# ------------------------------------------------------------------------------
+# CUSTOM MUTATION WEIGHTS
+# ------------------------------------------------------------------------------
+# Custom mutations are loaded from .jl files in this directory.
+# The key should match the filename (without .jl extension).
+# Set weight > 0 to enable, 0 to disable.
+
+[custom_mutations]
+# Example mutation: adds a constant offset to a random subtree
+add_constant_offset = 0.5
+
+# Slots for additional LLM-generated mutations (add as needed)
+# mutation_2 = 0.0
+# mutation_3 = 0.0
+# mutation_4 = 0.0
+# mutation_5 = 0.0

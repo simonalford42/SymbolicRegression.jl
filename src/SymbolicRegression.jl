@@ -220,6 +220,7 @@ using DispatchDoctor: @stable
     include("Population.jl")
     include("HallOfFame.jl")
     include("ExpressionBuilder.jl")
+    include("CustomMutations.jl")  # Load custom mutations before Mutate.jl
     include("Mutate.jl")
     include("RegularizedEvolution.jl")
     include("SingleIteration.jl")
@@ -304,6 +305,9 @@ using .PopulationModule: Population, best_sub_pop, record_population, best_of_sa
 using .HallOfFameModule:
     HallOfFame, calculate_pareto_frontier, string_dominating_pareto_curve
 using .MutateModule: mutate!, condition_mutation_weights!, MutationResult
+using .CustomMutationsModule: setup_custom_mutations!, reload_custom_mutations!,
+    load_mutation_from_string!, load_mutation_from_file!, register_mutation!,
+    clear_dynamic_mutations!, list_available_mutations, setup_dynamic_mutation!
 using .SingleIterationModule: s_r_cycle, optimize_and_simplify_population
 using .ProgressBarsModule: WrappedProgressBar
 using .RecorderModule: @recorder, find_iteration_from_record
@@ -875,6 +879,7 @@ function _main_search_loop!(
     ropt::AbstractRuntimeOptions,
     options::AbstractOptions,
 ) where {T,L,N}
+    # println("🔬 META-SR DEV MODE: Using fork github.com/simonalford42/SymbolicRegression.jl")
     ropt.verbosity > 0 && @info "Started!"
     nout = length(datasets)
     start_time = time()
@@ -1268,6 +1273,19 @@ using .MLJInterfaceModule:
 
 # TODO: Hack to force ConstructionBase version
 using ConstructionBase: ConstructionBase as _
+
+# Initialize custom mutations with the global CUSTOM_MUTATION_NAMES
+function _initialize_custom_mutations()
+    try
+        default_weights = MutationWeights()
+        setup_custom_mutations!(CoreModule.CUSTOM_MUTATION_NAMES, default_weights)
+    catch e
+        @warn "Failed to initialize custom mutations: $e"
+    end
+end
+
+# Call initialization (will be called again during precompile)
+_initialize_custom_mutations()
 
 include("precompile.jl")
 redirect_stdout(devnull) do

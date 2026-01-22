@@ -115,7 +115,23 @@ Base.@kwdef mutable struct MutationWeights <: AbstractMutationWeights
     optimize::Float64 = 0.0
     form_connection::Float64 = 0.5
     break_connection::Float64 = 0.1
+    # Custom mutation slots (weights loaded from custom_mutations/config.toml)
+    custom_mutation_1::Float64 = 0.0
+    custom_mutation_2::Float64 = 0.0
+    custom_mutation_3::Float64 = 0.0
+    custom_mutation_4::Float64 = 0.0
+    custom_mutation_5::Float64 = 0.0
 end
+
+# Mapping from custom mutation slot to actual mutation name
+# This gets populated when custom mutations are loaded
+const CUSTOM_MUTATION_NAMES = Dict{Symbol,Symbol}(
+    :custom_mutation_1 => :none,
+    :custom_mutation_2 => :none,
+    :custom_mutation_3 => :none,
+    :custom_mutation_4 => :none,
+    :custom_mutation_5 => :none,
+)
 
 const mutations = fieldnames(MutationWeights)
 const v_mutations = Symbol[mutations...]

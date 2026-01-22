@@ -1,6 +1,7 @@
 module MutateModule
 
 using DispatchDoctor: @unstable
+using Random: AbstractRNG, default_rng
 using DynamicExpressions:
     AbstractExpression,
     copy_into!,
@@ -17,8 +18,10 @@ using ..CoreModule:
     RecordType,
     sample_mutation,
     max_features,
-    dataset_fraction
+    dataset_fraction,
+    CUSTOM_MUTATION_NAMES
 using ..ComplexityModule: compute_complexity
+using ..CustomMutationsModule: apply_custom_mutation
 using ..LossFunctionsModule: eval_cost
 using ..CheckConstraintsModule: check_constraints
 using ..AdaptiveParsimonyModule: RunningSearchStatistics
@@ -730,6 +733,101 @@ function crossover_generation(
 
     crossover_accepted = true
     return baby1, baby2, crossover_accepted, num_evals
+end
+
+# ==============================================================================
+# Custom Mutation Dispatchers
+# ==============================================================================
+# These dispatch to dynamically loaded custom mutations from custom_mutations/
+
+function mutate!(
+    tree::N,
+    member::P,
+    ::Val{:custom_mutation_1},
+    ::AbstractMutationWeights,
+    options::AbstractOptions;
+    recorder::RecordType,
+    nfeatures,
+    kws...,
+) where {N<:AbstractExpression,P<:PopMember}
+    mutation_name = CUSTOM_MUTATION_NAMES[:custom_mutation_1]
+    if mutation_name != :none
+        tree = apply_custom_mutation(mutation_name, tree, options, nfeatures)
+        @recorder recorder["type"] = "custom:$(mutation_name)"
+    end
+    return MutationResult{N,P}(; tree=tree)
+end
+
+function mutate!(
+    tree::N,
+    member::P,
+    ::Val{:custom_mutation_2},
+    ::AbstractMutationWeights,
+    options::AbstractOptions;
+    recorder::RecordType,
+    nfeatures,
+    kws...,
+) where {N<:AbstractExpression,P<:PopMember}
+    mutation_name = CUSTOM_MUTATION_NAMES[:custom_mutation_2]
+    if mutation_name != :none
+        tree = apply_custom_mutation(mutation_name, tree, options, nfeatures)
+        @recorder recorder["type"] = "custom:$(mutation_name)"
+    end
+    return MutationResult{N,P}(; tree=tree)
+end
+
+function mutate!(
+    tree::N,
+    member::P,
+    ::Val{:custom_mutation_3},
+    ::AbstractMutationWeights,
+    options::AbstractOptions;
+    recorder::RecordType,
+    nfeatures,
+    kws...,
+) where {N<:AbstractExpression,P<:PopMember}
+    mutation_name = CUSTOM_MUTATION_NAMES[:custom_mutation_3]
+    if mutation_name != :none
+        tree = apply_custom_mutation(mutation_name, tree, options, nfeatures)
+        @recorder recorder["type"] = "custom:$(mutation_name)"
+    end
+    return MutationResult{N,P}(; tree=tree)
+end
+
+function mutate!(
+    tree::N,
+    member::P,
+    ::Val{:custom_mutation_4},
+    ::AbstractMutationWeights,
+    options::AbstractOptions;
+    recorder::RecordType,
+    nfeatures,
+    kws...,
+) where {N<:AbstractExpression,P<:PopMember}
+    mutation_name = CUSTOM_MUTATION_NAMES[:custom_mutation_4]
+    if mutation_name != :none
+        tree = apply_custom_mutation(mutation_name, tree, options, nfeatures)
+        @recorder recorder["type"] = "custom:$(mutation_name)"
+    end
+    return MutationResult{N,P}(; tree=tree)
+end
+
+function mutate!(
+    tree::N,
+    member::P,
+    ::Val{:custom_mutation_5},
+    ::AbstractMutationWeights,
+    options::AbstractOptions;
+    recorder::RecordType,
+    nfeatures,
+    kws...,
+) where {N<:AbstractExpression,P<:PopMember}
+    mutation_name = CUSTOM_MUTATION_NAMES[:custom_mutation_5]
+    if mutation_name != :none
+        tree = apply_custom_mutation(mutation_name, tree, options, nfeatures)
+        @recorder recorder["type"] = "custom:$(mutation_name)"
+    end
+    return MutationResult{N,P}(; tree=tree)
 end
 
 end  # module MutateModule
