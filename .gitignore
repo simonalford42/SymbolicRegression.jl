@@ -31,3 +31,8 @@ private
 
 # Generated examples:
 docs/src/examples/
+
+
+lock.pid
+pyjuliapkg/
+
