@@ -1295,6 +1295,16 @@ end
 # Call initialization (will be called again during precompile)
 _initialize_custom_mutations()
 
+function __init__()
+    debug_import = lowercase(get(ENV, "SYMBOLICREGRESSION_DEBUG_IMPORT", "0"))
+    if debug_import in ("1", "true", "yes", "on")
+        println(
+            "SYMBOLICREGRESSION_LOCAL_MARKER path=$(abspath(@__FILE__)) version=$(PACKAGE_VERSION)"
+        )
+        flush(stdout)
+    end
+end
+
 include("precompile.jl")
 redirect_stdout(devnull) do
     redirect_stderr(devnull) do
