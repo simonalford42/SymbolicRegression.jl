@@ -2,12 +2,13 @@ module RegularizedEvolutionModule
 
 using DynamicExpressions: string_tree
 using ..CoreModule: AbstractOptions, Dataset, RecordType, DATA_TYPE, LOSS_TYPE
-using ..PopulationModule: Population, best_of_sample
+using ..PopulationModule: Population
 using ..AdaptiveParsimonyModule: RunningSearchStatistics
 using ..MutateModule: next_generation, crossover_generation
 using ..RecorderModule: @recorder
 using ..UtilsModule: argmin_fast
 using ..CustomSurvivalModule: apply_custom_survival
+using ..CustomSelectionModule: apply_custom_selection
 
 # Pass through the population several times, replacing the oldest
 # with the fittest of a small subsample
@@ -25,7 +26,7 @@ function reg_evol_cycle(
 
     for i in 1:n_evol_cycles
         if rand() > options.crossover_probability
-            allstar = best_of_sample(pop, running_search_statistics, options)
+            allstar = apply_custom_selection(pop, running_search_statistics, options)
             mutation_recorder = RecordType()
             baby, mutation_accepted, tmp_num_evals = next_generation(
                 dataset,
@@ -78,8 +79,8 @@ function reg_evol_cycle(
             pop.members[oldest] = baby
 
         else # Crossover
-            allstar1 = best_of_sample(pop, running_search_statistics, options)
-            allstar2 = best_of_sample(pop, running_search_statistics, options)
+            allstar1 = apply_custom_selection(pop, running_search_statistics, options)
+            allstar2 = apply_custom_selection(pop, running_search_statistics, options)
 
             crossover_recorder = RecordType()
             baby1, baby2, crossover_accepted, tmp_num_evals = crossover_generation(

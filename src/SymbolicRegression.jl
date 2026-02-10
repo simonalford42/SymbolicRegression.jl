@@ -222,6 +222,7 @@ using DispatchDoctor: @stable
     include("ExpressionBuilder.jl")
     include("CustomMutations.jl")  # Load custom mutations before Mutate.jl
     include("CustomSurvival.jl")
+    include("CustomSelection.jl")
     include("Mutate.jl")
     include("RegularizedEvolution.jl")
     include("SingleIteration.jl")
@@ -312,6 +313,9 @@ using .CustomMutationsModule: setup_custom_mutations!, reload_custom_mutations!,
 using .CustomSurvivalModule: apply_custom_survival,
     load_survival_from_string!, load_survival_from_file!,
     clear_dynamic_survivals!, list_available_survivals, reload_custom_survivals!
+using .CustomSelectionModule: apply_custom_selection,
+    load_selection_from_string!, load_selection_from_file!,
+    clear_dynamic_selections!, list_available_selections, reload_custom_selections!
 using .SingleIterationModule: s_r_cycle, optimize_and_simplify_population
 using .ProgressBarsModule: WrappedProgressBar
 using .RecorderModule: @recorder, find_iteration_from_record
