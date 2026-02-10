@@ -7,6 +7,7 @@ using ..AdaptiveParsimonyModule: RunningSearchStatistics
 using ..MutateModule: next_generation, crossover_generation
 using ..RecorderModule: @recorder
 using ..UtilsModule: argmin_fast
+using ..CustomSurvivalModule: apply_custom_survival
 
 # Pass through the population several times, replacing the oldest
 # with the fittest of a small subsample
@@ -42,7 +43,7 @@ function reg_evol_cycle(
                 continue
             end
 
-            oldest = argmin_fast([pop.members[member].birth for member in 1:(pop.n)])
+            oldest = apply_custom_survival(pop, options)
 
             @recorder begin
                 if !haskey(record, "mutations")
@@ -96,11 +97,8 @@ function reg_evol_cycle(
             end
 
             # Find the oldest members to replace:
-            oldest1 = argmin_fast([pop.members[member].birth for member in 1:(pop.n)])
-            BT = typeof(first(pop.members).birth)
-            oldest2 = argmin_fast([
-                i == oldest1 ? typemax(BT) : pop.members[i].birth for i in 1:(pop.n)
-            ])
+            oldest1 = apply_custom_survival(pop, options)
+            oldest2 = apply_custom_survival(pop, options; exclude_indices=[oldest1])
 
             @recorder begin
                 if !haskey(record, "mutations")
