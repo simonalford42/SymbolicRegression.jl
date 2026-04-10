@@ -613,7 +613,7 @@ $(OPTION_DESCRIPTIONS)
     optimizer_algorithm::Union{AbstractString,Optim.AbstractOptimizer}=Optim.BFGS(;
         linesearch=LineSearches.BackTracking()
     ),
-    optimizer_nrestarts::Int=3,  # exp18: 2->3 restarts with scale-aware additive (exp14)
+    optimizer_nrestarts::Int=2,
     optimizer_probability::AbstractFloat=0.14,
     optimizer_iterations::Union{Nothing,Integer}=nothing,
     optimizer_f_calls_limit::Union{Nothing,Integer}=nothing,
@@ -1146,7 +1146,7 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
             perturbation_factor=0.076,
             probability_negate_constant=0.01,
             # Tournament Selection
-            tournament_selection_n=12,
+            tournament_selection_n=10,  # exp19: 12->10 for less selection pressure, more diversity
             tournament_selection_p=0.86,
             # Migration between Populations
             fraction_replaced=0.00036,
