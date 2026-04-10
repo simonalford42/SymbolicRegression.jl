@@ -1119,9 +1119,9 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
             # Setting the Search Size
             populations=15,
             population_size=33,
-            ncycles_per_iteration=700,  # exp38: 550->700, more structural evolution per BFGS round
+            ncycles_per_iteration=550,
             # Working with Complexities
-            parsimony=0.0032,
+            parsimony=0.0,  # exp39: remove base parsimony, let adaptive handle complexity
             warmup_maxsize_by=0.0,
             adaptive_parsimony_scaling=20.0,
             # Mutations
