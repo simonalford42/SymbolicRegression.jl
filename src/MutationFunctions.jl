@@ -155,7 +155,7 @@ function mutate_factor(::Type{T}, temperature, options, rng) where {T<:Number}
 
     factor = makeConstBigger ? factor : 1 / factor
 
-    if rand(rng) > options.probability_negate_constant
+    if rand(rng) < options.probability_negate_constant
         factor *= -1
     end
     return factor
