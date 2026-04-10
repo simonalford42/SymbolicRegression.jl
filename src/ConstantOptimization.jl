@@ -89,9 +89,16 @@ function _optimize_constants_inner(
     # Try other initial conditions:
     for i in 1:(options.optimizer_nrestarts)
         eps = randn(rng, T, size(x0)...)
-        # Scale-aware additive restart (exp14): max(|x0|, 1) for near-zero constants
-        scale = @. max(abs(x0), T(1))
-        xt = @. x0 + T(1//2) * scale * eps
+        xt = if i == 1
+            # exp14: scale-aware restart from original x0
+            scale = @. max(abs(x0), T(1))
+            @. x0 + T(1//2) * scale * eps
+        else
+            # exp33: warm-start from best result found so far
+            best_x = result.minimizer
+            scale_best = @. max(abs(best_x), T(1))
+            @. best_x + T(1//2) * scale_best * eps
+        end
         tmpresult = Optim.optimize(obj, xt, algorithm, optimizer_options)
         num_evals += tmpresult.f_calls * eval_fraction
         # TODO: Does this need to take into account h_calls?
