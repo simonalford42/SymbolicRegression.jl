@@ -1143,14 +1143,14 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
             crossover_probability=0.066,
             annealing=false,
             alpha=0.1,
-            perturbation_factor=0.076,
+            perturbation_factor=0.15,  # exp21: 0.076->0.15 broader constant mutations
             probability_negate_constant=0.01,
             # Tournament Selection
             tournament_selection_n=12,
             tournament_selection_p=0.86,
             # Migration between Populations
             fraction_replaced=0.00036,
-            fraction_replaced_hof=0.07,  # exp20: 0.035->0.07 faster HoF propagation to subpopulations
+            fraction_replaced_hof=0.035,
             fraction_replaced_guesses=0.001,
             topn=12,
             # Performance and Parallelization
