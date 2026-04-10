@@ -614,7 +614,7 @@ $(OPTION_DESCRIPTIONS)
         linesearch=LineSearches.BackTracking()
     ),
     optimizer_nrestarts::Int=2,
-    optimizer_probability::AbstractFloat=0.10,  # exp22: 0.14->0.10 fewer BFGS calls, more evolutionary gens
+    optimizer_probability::AbstractFloat=0.14,
     optimizer_iterations::Union{Nothing,Integer}=nothing,
     optimizer_f_calls_limit::Union{Nothing,Integer}=nothing,
     optimizer_options::Union{Dict,NamedTuple,Optim.Options,Nothing}=nothing,
@@ -1149,7 +1149,7 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
             tournament_selection_n=12,
             tournament_selection_p=0.86,
             # Migration between Populations
-            fraction_replaced=0.00036,
+            fraction_replaced=0.001,  # exp23: 0.00036->0.001 more inter-population migration
             fraction_replaced_hof=0.035,
             fraction_replaced_guesses=0.001,
             topn=12,
