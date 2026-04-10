@@ -1119,7 +1119,7 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
             # Setting the Search Size
             populations=15,
             population_size=33,
-            ncycles_per_iteration=575,  # exp47: fine-grained 550->575, test if I_24_6 benefit appears before I_44_4 harm
+            ncycles_per_iteration=550,
             # Working with Complexities
             parsimony=0.0032,
             warmup_maxsize_by=0.0,
