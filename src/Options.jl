@@ -1119,7 +1119,7 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
             # Setting the Search Size
             populations=15,
             population_size=33,
-            ncycles_per_iteration=400,  # exp41: 550->400, less evolution per BFGS round (opposite of exp38)
+            ncycles_per_iteration=550,
             # Working with Complexities
             parsimony=0.0032,
             warmup_maxsize_by=0.0,
