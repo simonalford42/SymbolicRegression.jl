@@ -1121,7 +1121,7 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
             population_size=33,
             ncycles_per_iteration=550,
             # Working with Complexities
-            parsimony=0.0,  # exp39: remove base parsimony, let adaptive handle complexity
+            parsimony=0.0032,
             warmup_maxsize_by=0.0,
             adaptive_parsimony_scaling=20.0,
             # Mutations

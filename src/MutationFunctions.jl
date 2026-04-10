@@ -494,9 +494,20 @@ function crossover_trees(
     t1 = copy(tree1)
     t2 = copy(tree2)
 
-    # pick random nodes (and parents) in each tree
-    n1, p1, i1 = _random_node_and_parent(t1, rng)
-    n2, p2, i2 = _random_node_and_parent(t2, rng)
+    # exp40: prefer non-leaf nodes (70%) for more meaningful subtree swaps
+    function _biased_node_and_parent(tree, rng)
+        has_internal = any(t -> t.degree > 0, tree)
+        if has_internal && rand(rng) < 0.7
+            node = rand(rng, NodeSampler(; tree, filter=t -> t.degree > 0))
+            node === tree && return (node, node, 0)
+            parent, idx = _find_parent(tree, node)
+            return (node, parent, idx)
+        else
+            return _random_node_and_parent(tree, rng)
+        end
+    end
+    n1, p1, i1 = _biased_node_and_parent(t1, rng)
+    n2, p2, i2 = _biased_node_and_parent(t2, rng)
 
     n1 = copy(n1)
 
