@@ -1129,7 +1129,7 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
                 mutate_constant=0.048,
                 mutate_operator=0.47,
                 swap_operands=0.1,
-                rotate_tree=0.0,
+                rotate_tree=0.3,  # exp30: enable tree rotation (was 0.0)
                 add_node=0.79,
                 insert_node=5.1,
                 delete_node=1.7,
@@ -1152,7 +1152,7 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
             fraction_replaced=0.00036,
             fraction_replaced_hof=0.035,
             fraction_replaced_guesses=0.001,
-            topn=20,  # exp29: 12->20 more diverse elite solutions in HoF
+            topn=12,
             # Performance and Parallelization
             batching=false,
             batch_size=50,
