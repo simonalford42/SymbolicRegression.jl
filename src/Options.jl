@@ -1144,7 +1144,7 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
             annealing=false,
             alpha=0.1,
             perturbation_factor=0.076,
-            probability_negate_constant=0.01,
+            probability_negate_constant=0.05,  # exp43: 0.01->0.05, more frequent sign exploration
             # Tournament Selection
             tournament_selection_n=12,
             tournament_selection_p=0.86,
