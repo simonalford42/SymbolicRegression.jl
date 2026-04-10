@@ -613,7 +613,7 @@ $(OPTION_DESCRIPTIONS)
     optimizer_algorithm::Union{AbstractString,Optim.AbstractOptimizer}=Optim.BFGS(;
         linesearch=LineSearches.BackTracking()
     ),
-    optimizer_nrestarts::Int=2,
+    optimizer_nrestarts::Int=3,  # exp18: 2->3 restarts with scale-aware additive (exp14)
     optimizer_probability::AbstractFloat=0.14,
     optimizer_iterations::Union{Nothing,Integer}=nothing,
     optimizer_f_calls_limit::Union{Nothing,Integer}=nothing,
