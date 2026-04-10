@@ -1150,7 +1150,7 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
             tournament_selection_p=0.86,
             # Migration between Populations
             fraction_replaced=0.00036,
-            fraction_replaced_hof=0.015,  # exp45: 0.035->0.015, less HoF injection for more population independence
+            fraction_replaced_hof=0.035,
             fraction_replaced_guesses=0.001,
             topn=12,
             # Performance and Parallelization
