@@ -1123,7 +1123,7 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
             # Working with Complexities
             parsimony=0.0032,
             warmup_maxsize_by=0.0,
-            adaptive_parsimony_scaling=20.0,
+            adaptive_parsimony_scaling=5.0,  # exp32: 20.0->5.0 less complexity-diversity penalty in tournament
             # Mutations
             mutation_weights=MutationWeights(;
                 mutate_constant=0.048,
