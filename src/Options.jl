@@ -614,7 +614,7 @@ $(OPTION_DESCRIPTIONS)
         linesearch=LineSearches.BackTracking()
     ),
     optimizer_nrestarts::Int=2,
-    optimizer_probability::AbstractFloat=0.14,
+    optimizer_probability::AbstractFloat=0.18,  # exp36: 0.14->0.18, more BFGS for better constant-finding
     optimizer_iterations::Union{Nothing,Integer}=nothing,
     optimizer_f_calls_limit::Union{Nothing,Integer}=nothing,
     optimizer_options::Union{Dict,NamedTuple,Optim.Options,Nothing}=nothing,
@@ -1147,7 +1147,7 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
             probability_negate_constant=0.01,
             # Tournament Selection
             tournament_selection_n=12,
-            tournament_selection_p=0.75,  # exp35: 0.86->0.75, less greedy selection for diversity
+            tournament_selection_p=0.86,
             # Migration between Populations
             fraction_replaced=0.00036,
             fraction_replaced_hof=0.035,
