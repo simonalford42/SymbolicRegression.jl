@@ -80,12 +80,8 @@ function reg_evol_cycle(
 
         else # Crossover
             allstar1 = apply_custom_selection(pop, running_search_statistics, options)
-            # exp34: 20% random 2nd parent, 80% tournament (less disruptive than exp24's 100%)
-            allstar2 = if rand() < 0.20
-                pop.members[rand(1:pop.n)]
-            else
-                apply_custom_selection(pop, running_search_statistics, options)
-            end
+            # exp24: random second parent for more structural diversity
+            allstar2 = pop.members[rand(1:pop.n)]
 
             crossover_recorder = RecordType()
             baby1, baby2, crossover_accepted, tmp_num_evals = crossover_generation(
