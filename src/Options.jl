@@ -1144,10 +1144,10 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
             annealing=false,
             alpha=0.1,
             perturbation_factor=0.076,
-            probability_negate_constant=0.05,  # exp43: 0.01->0.05, more frequent sign exploration
+            probability_negate_constant=0.01,
             # Tournament Selection
             tournament_selection_n=12,
-            tournament_selection_p=0.86,
+            tournament_selection_p=0.92,  # exp44: 0.86->0.92, higher exploitation (opposite of exp35)
             # Migration between Populations
             fraction_replaced=0.00036,
             fraction_replaced_hof=0.035,
