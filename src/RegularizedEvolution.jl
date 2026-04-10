@@ -80,12 +80,8 @@ function reg_evol_cycle(
 
         else # Crossover
             allstar1 = apply_custom_selection(pop, running_search_statistics, options)
-            # exp26: 50% random, 50% tournament for 2nd parent (hybrid diversity)
-            allstar2 = if rand() < 0.5
-                pop.members[rand(1:pop.n)]
-            else
-                apply_custom_selection(pop, running_search_statistics, options)
-            end
+            # exp24: random second parent for more structural diversity
+            allstar2 = pop.members[rand(1:pop.n)]
 
             crossover_recorder = RecordType()
             baby1, baby2, crossover_accepted, tmp_num_evals = crossover_generation(
@@ -102,22 +98,15 @@ function reg_evol_cycle(
                 continue
             end
 
-            # Find the oldest members to replace:
+            # exp27: replace only 1 oldest member with the better child (less disruptive)
+            better_baby = baby1.cost <= baby2.cost ? baby1 : baby2
             oldest1 = apply_custom_survival(pop, options)
-            oldest2 = apply_custom_survival(pop, options; exclude_indices=[oldest1])
 
             @recorder begin
                 if !haskey(record, "mutations")
                     record["mutations"] = RecordType()
                 end
-                for member in [
-                    allstar1,
-                    allstar2,
-                    baby1,
-                    baby2,
-                    pop.members[oldest1],
-                    pop.members[oldest2],
-                ]
+                for member in [allstar1, allstar2, baby1, baby2, pop.members[oldest1]]
                     if !haskey(record["mutations"], "$(member.ref)")
                         record["mutations"]["$(member.ref)"] = RecordType(
                             "events" => Vector{RecordType}(),
@@ -138,7 +127,6 @@ function reg_evol_cycle(
                     "details" => crossover_recorder,
                 )
                 death_event1 = RecordType("type" => "death", "time" => time())
-                death_event2 = RecordType("type" => "death", "time" => time())
 
                 push!(record["mutations"]["$(allstar1.ref)"]["events"], crossover_event)
                 push!(record["mutations"]["$(allstar2.ref)"]["events"], crossover_event)
@@ -146,15 +134,10 @@ function reg_evol_cycle(
                     record["mutations"]["$(pop.members[oldest1].ref)"]["events"],
                     death_event1,
                 )
-                push!(
-                    record["mutations"]["$(pop.members[oldest2].ref)"]["events"],
-                    death_event2,
-                )
             end
 
-            # Replace old members with new ones:
-            pop.members[oldest1] = baby1
-            pop.members[oldest2] = baby2
+            # Replace only the oldest member with the better child:
+            pop.members[oldest1] = better_baby
         end
     end
 
