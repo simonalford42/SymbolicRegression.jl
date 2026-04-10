@@ -1133,7 +1133,7 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
                 add_node=0.79,
                 insert_node=5.1,
                 delete_node=1.7,
-                simplify=0.0020,
+                simplify=0.005,  # exp51: increase simplify 0.002->0.005 (faster bloat reduction)
                 randomize=0.00023,
                 do_nothing=0.21,
                 optimize=0.0,
@@ -1149,7 +1149,7 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
             tournament_selection_n=12,
             tournament_selection_p=0.86,
             # Migration between Populations
-            fraction_replaced=0.0001,  # exp50: reduce migration 0.00036->0.0001 (less disruption)
+            fraction_replaced=0.00036,
             fraction_replaced_hof=0.035,
             fraction_replaced_guesses=0.001,
             topn=12,
