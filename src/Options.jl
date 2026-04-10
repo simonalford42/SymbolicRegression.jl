@@ -614,7 +614,7 @@ $(OPTION_DESCRIPTIONS)
         linesearch=LineSearches.BackTracking()
     ),
     optimizer_nrestarts::Int=2,
-    optimizer_probability::AbstractFloat=0.14,
+    optimizer_probability::AbstractFloat=0.10,  # exp22: 0.14->0.10 fewer BFGS calls, more evolutionary gens
     optimizer_iterations::Union{Nothing,Integer}=nothing,
     optimizer_f_calls_limit::Union{Nothing,Integer}=nothing,
     optimizer_options::Union{Dict,NamedTuple,Optim.Options,Nothing}=nothing,
@@ -1143,7 +1143,7 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
             crossover_probability=0.066,
             annealing=false,
             alpha=0.1,
-            perturbation_factor=0.15,  # exp21: 0.076->0.15 broader constant mutations
+            perturbation_factor=0.076,
             probability_negate_constant=0.01,
             # Tournament Selection
             tournament_selection_n=12,
