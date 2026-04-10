@@ -614,7 +614,7 @@ $(OPTION_DESCRIPTIONS)
         linesearch=LineSearches.BackTracking()
     ),
     optimizer_nrestarts::Int=2,
-    optimizer_probability::AbstractFloat=0.18,  # exp36: 0.14->0.18, more BFGS for better constant-finding
+    optimizer_probability::AbstractFloat=0.14,
     optimizer_iterations::Union{Nothing,Integer}=nothing,
     optimizer_f_calls_limit::Union{Nothing,Integer}=nothing,
     optimizer_options::Union{Dict,NamedTuple,Optim.Options,Nothing}=nothing,
