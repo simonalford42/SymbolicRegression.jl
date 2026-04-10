@@ -88,8 +88,6 @@ function _optimize_constants_inner(
     num_evals = result.f_calls * eval_fraction
     # Try other initial conditions:
     for i in 1:(options.optimizer_nrestarts)
-        # exp56: skip restarts if loss already near-zero (frees compute for more evolution)
-        result.minimum < T(1e-6) && break
         eps = randn(rng, T, size(x0)...)
         # Scale-aware additive restart (exp14): max(|x0|, 1) for near-zero constants
         scale = @. max(abs(x0), T(1))
