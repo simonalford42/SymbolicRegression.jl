@@ -44,12 +44,7 @@ function reg_evol_cycle(
                 continue
             end
 
-            # exp37: 10% chance to eliminate worst instead of oldest (fitness-aware survival)
-            oldest = if rand() < 0.10
-                argmax(pop.members[i].cost for i in 1:(pop.n))
-            else
-                apply_custom_survival(pop, options)
-            end
+            oldest = apply_custom_survival(pop, options)
 
             @recorder begin
                 if !haskey(record, "mutations")
@@ -103,17 +98,9 @@ function reg_evol_cycle(
                 continue
             end
 
-            # Find members to replace (exp37: 10% worst instead of oldest):
-            oldest1 = if rand() < 0.10
-                argmax(pop.members[i].cost for i in 1:(pop.n))
-            else
-                apply_custom_survival(pop, options)
-            end
-            oldest2 = if rand() < 0.10
-                argmax(i -> pop.members[i].cost, [j for j in 1:(pop.n) if j != oldest1])
-            else
-                apply_custom_survival(pop, options; exclude_indices=[oldest1])
-            end
+            # Find the oldest members to replace:
+            oldest1 = apply_custom_survival(pop, options)
+            oldest2 = apply_custom_survival(pop, options; exclude_indices=[oldest1])
 
             @recorder begin
                 if !haskey(record, "mutations")
