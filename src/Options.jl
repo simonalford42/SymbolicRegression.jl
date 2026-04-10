@@ -1135,7 +1135,7 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
                 delete_node=1.7,
                 simplify=0.0020,
                 randomize=0.00023,
-                do_nothing=0.10,  # exp46: 0.21->0.10, fewer skip mutations = more actual evolution
+                do_nothing=0.21,
                 optimize=0.0,
                 form_connection=0.5,
                 break_connection=0.1,
