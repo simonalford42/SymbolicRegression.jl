@@ -566,7 +566,14 @@ end
 function _random_node_and_parent(
     tree::AbstractExpressionNode, rng::AbstractRNG=default_rng()
 )
-    node = rand(rng, NodeSampler(; tree))
+    # Bias toward operator (internal) nodes: promotes exchange of meaningful functional
+    # subexpressions rather than just leaf constants/variables
+    has_operators = any(t -> t.degree > 0, tree)
+    node = if has_operators && rand(rng) < 0.8
+        rand(rng, NodeSampler(; tree, filter=t -> t.degree > 0))
+    else
+        rand(rng, NodeSampler(; tree))
+    end
     if node === tree
         return node, node, 0
     else
