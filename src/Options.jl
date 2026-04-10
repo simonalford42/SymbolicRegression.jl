@@ -1147,7 +1147,7 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
             probability_negate_constant=0.01,
             # Tournament Selection
             tournament_selection_n=12,
-            tournament_selection_p=0.86,
+            tournament_selection_p=0.75,  # exp35: 0.86->0.75, less greedy selection for diversity
             # Migration between Populations
             fraction_replaced=0.00036,
             fraction_replaced_hof=0.035,
