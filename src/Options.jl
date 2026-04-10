@@ -1141,7 +1141,7 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
                 break_connection=0.1,
             ),
             crossover_probability=0.066,
-            annealing=false,
+            annealing=true,  # exp49: enable annealing (T: 1.0->0.0 per s_r_cycle)
             alpha=0.1,
             perturbation_factor=0.076,
             probability_negate_constant=0.01,
