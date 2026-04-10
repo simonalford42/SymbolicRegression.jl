@@ -25,7 +25,7 @@ function reg_evol_cycle(
     n_evol_cycles = ceil(Int, pop.n / options.tournament_selection_n)
 
     for i in 1:n_evol_cycles
-        if rand() > 0.30  # exp25: 25->30% crossover (random 2nd parent makes more crossover safer)
+        if rand() > 0.25  # tuned: 25% crossover (exp7; ~6.6% original)
             allstar = apply_custom_selection(pop, running_search_statistics, options)
             mutation_recorder = RecordType()
             baby, mutation_accepted, tmp_num_evals = next_generation(
@@ -80,8 +80,12 @@ function reg_evol_cycle(
 
         else # Crossover
             allstar1 = apply_custom_selection(pop, running_search_statistics, options)
-            # exp24: random second parent for more structural diversity
-            allstar2 = pop.members[rand(1:pop.n)]
+            # exp26: 50% random, 50% tournament for 2nd parent (hybrid diversity)
+            allstar2 = if rand() < 0.5
+                pop.members[rand(1:pop.n)]
+            else
+                apply_custom_selection(pop, running_search_statistics, options)
+            end
 
             crossover_recorder = RecordType()
             baby1, baby2, crossover_accepted, tmp_num_evals = crossover_generation(
