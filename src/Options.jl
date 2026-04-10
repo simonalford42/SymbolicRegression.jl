@@ -1126,7 +1126,7 @@ function default_options(@nospecialize(version::Union{VersionNumber,Nothing} = n
             adaptive_parsimony_scaling=20.0,
             # Mutations
             mutation_weights=MutationWeights(;
-                mutate_constant=0.048,
+                mutate_constant=0.20,  # exp28: 0.048->0.20 more frequent constant mutations
                 mutate_operator=0.47,
                 swap_operands=0.1,
                 rotate_tree=0.0,

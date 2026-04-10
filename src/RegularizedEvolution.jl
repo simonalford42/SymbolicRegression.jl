@@ -98,15 +98,22 @@ function reg_evol_cycle(
                 continue
             end
 
-            # exp27: replace only 1 oldest member with the better child (less disruptive)
-            better_baby = baby1.cost <= baby2.cost ? baby1 : baby2
+            # Find the oldest members to replace:
             oldest1 = apply_custom_survival(pop, options)
+            oldest2 = apply_custom_survival(pop, options; exclude_indices=[oldest1])
 
             @recorder begin
                 if !haskey(record, "mutations")
                     record["mutations"] = RecordType()
                 end
-                for member in [allstar1, allstar2, baby1, baby2, pop.members[oldest1]]
+                for member in [
+                    allstar1,
+                    allstar2,
+                    baby1,
+                    baby2,
+                    pop.members[oldest1],
+                    pop.members[oldest2],
+                ]
                     if !haskey(record["mutations"], "$(member.ref)")
                         record["mutations"]["$(member.ref)"] = RecordType(
                             "events" => Vector{RecordType}(),
@@ -127,6 +134,7 @@ function reg_evol_cycle(
                     "details" => crossover_recorder,
                 )
                 death_event1 = RecordType("type" => "death", "time" => time())
+                death_event2 = RecordType("type" => "death", "time" => time())
 
                 push!(record["mutations"]["$(allstar1.ref)"]["events"], crossover_event)
                 push!(record["mutations"]["$(allstar2.ref)"]["events"], crossover_event)
@@ -134,10 +142,15 @@ function reg_evol_cycle(
                     record["mutations"]["$(pop.members[oldest1].ref)"]["events"],
                     death_event1,
                 )
+                push!(
+                    record["mutations"]["$(pop.members[oldest2].ref)"]["events"],
+                    death_event2,
+                )
             end
 
-            # Replace only the oldest member with the better child:
-            pop.members[oldest1] = better_baby
+            # Replace old members with new ones:
+            pop.members[oldest1] = baby1
+            pop.members[oldest2] = baby2
         end
     end
 
