@@ -494,9 +494,19 @@ function crossover_trees(
     t1 = copy(tree1)
     t2 = copy(tree2)
 
-    # pick random nodes (and parents) in each tree
-    n1, p1, i1 = _random_node_and_parent(t1, rng)
-    n2, p2, i2 = _random_node_and_parent(t2, rng)
+    # exp55: 50% of crossovers swap constant leaves to share discovered constants
+    use_const_crossover = rand(rng) < 0.5 &&
+                          any(n -> n.degree == 0 && n.constant, t1) &&
+                          any(n -> n.degree == 0 && n.constant, t2)
+
+    if use_const_crossover
+        n1, p1, i1 = _random_const_node_and_parent(t1, rng)
+        n2, p2, i2 = _random_const_node_and_parent(t2, rng)
+    else
+        # pick random nodes (and parents) in each tree
+        n1, p1, i1 = _random_node_and_parent(t1, rng)
+        n2, p2, i2 = _random_node_and_parent(t2, rng)
+    end
 
     n1 = copy(n1)
 
@@ -515,6 +525,19 @@ function crossover_trees(
     end
 
     return t1, t2
+end
+
+"""Pick a random constant leaf node and its parent."""
+function _random_const_node_and_parent(
+    tree::AbstractExpressionNode, rng::AbstractRNG=default_rng()
+)
+    node = rand(rng, NodeSampler(; tree, filter=n -> n.degree == 0 && n.constant))
+    if node === tree
+        return node, node, 0
+    else
+        parent, idx = _find_parent(tree, node)
+        return node, parent, idx
+    end
 end
 
 function get_two_nodes_without_loop(tree::AbstractNode, rng::AbstractRNG; max_attempts=10)
