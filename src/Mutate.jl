@@ -726,12 +726,6 @@ function crossover_generation(
         deterministic=options.deterministic,
     )::P
 
-    # exp48: optimize constants in crossover babies for better starting quality
-    # (mutation babies already get BFGS via next_generation; crossover babies did not)
-    baby1, opt_evals1 = optimize_constants(dataset, baby1, options)
-    baby2, opt_evals2 = optimize_constants(dataset, baby2, options)
-    num_evals += opt_evals1 + opt_evals2
-
     @recorder begin
         recorder["result"] = "accept"
         recorder["reason"] = "pass"
