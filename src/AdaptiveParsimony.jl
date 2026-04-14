@@ -23,7 +23,7 @@ struct RunningSearchStatistics
     normalized_frequencies::Vector{Float64}  # Stores `frequencies`, but normalized (updated once in a while)
 end
 
-function RunningSearchStatistics(; options::AbstractOptions, window_size::Int=100000)
+function RunningSearchStatistics(; options::AbstractOptions, window_size::Int=30000)
     init_frequencies = ones(Float64, options.maxsize)
 
     return RunningSearchStatistics(
