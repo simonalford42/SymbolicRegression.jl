@@ -10,8 +10,17 @@ using ..UtilsModule: argmin_fast
 using ..CustomSurvivalModule: apply_custom_survival
 using ..CustomSelectionModule: apply_custom_selection
 
-# Pass through the population several times, replacing the oldest
-# with the fittest of a small subsample
+# Death tournament: select the worst member from a random sample to be replaced
+function _death_tournament(pop::P, n_sample::Int, exclude::Vector{Int}=Int[]) where {P<:Population}
+    valid = [i for i in 1:pop.n if i ∉ exclude]
+    isempty(valid) && return rand(1:pop.n)
+    n = min(n_sample, length(valid))
+    sample_idxs = [valid[rand(1:length(valid))] for _ in 1:n]
+    return sample_idxs[argmax([pop.members[i].cost for i in sample_idxs])]
+end
+
+# Pass through the population several times, replacing the worst in a sample
+# (death tournament) rather than the oldest
 function reg_evol_cycle(
     dataset::Dataset{T,L},
     pop::P,
@@ -44,7 +53,7 @@ function reg_evol_cycle(
                 continue
             end
 
-            oldest = apply_custom_survival(pop, options)
+            oldest = _death_tournament(pop, options.tournament_selection_n)
 
             @recorder begin
                 if !haskey(record, "mutations")
@@ -97,9 +106,9 @@ function reg_evol_cycle(
                 continue
             end
 
-            # Find the oldest members to replace:
-            oldest1 = apply_custom_survival(pop, options)
-            oldest2 = apply_custom_survival(pop, options; exclude_indices=[oldest1])
+            # Find the worst members to replace (death tournament):
+            oldest1 = _death_tournament(pop, options.tournament_selection_n)
+            oldest2 = _death_tournament(pop, options.tournament_selection_n, [oldest1])
 
             @recorder begin
                 if !haskey(record, "mutations")
