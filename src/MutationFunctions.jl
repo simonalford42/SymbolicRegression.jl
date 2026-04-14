@@ -144,12 +144,7 @@ function mutate_constant(
 end
 
 function mutate_value(rng::AbstractRNG, val::Number, temperature, options)
-    factor = mutate_factor(typeof(val), temperature, options, rng)
-    # Use additive perturbation scaled by max(|val|, 1) to avoid getting
-    # stuck when val ≈ 0 (multiplicative perturbation leaves zeros unchanged).
-    # Equivalent to multiplicative when |val| >= 1.
-    scale = max(abs(val), one(typeof(val)))
-    return val + (factor - one(typeof(factor))) * scale
+    return val * mutate_factor(typeof(val), temperature, options, rng)
 end
 
 function mutate_factor(::Type{T}, temperature, options, rng) where {T<:Number}
