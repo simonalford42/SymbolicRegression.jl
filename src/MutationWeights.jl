@@ -105,7 +105,7 @@ Base.@kwdef mutable struct MutationWeights <: AbstractMutationWeights
     mutate_operator::Float64 = 3.63
     mutate_feature::Float64 = 0.1
     swap_operands::Float64 = 0.00608
-    rotate_tree::Float64 = 0.3
+    rotate_tree::Float64 = 1.42
     add_node::Float64 = 0.0771
     insert_node::Float64 = 2.44
     delete_node::Float64 = 0.369
