@@ -25,7 +25,7 @@ function reg_evol_cycle(
     n_evol_cycles = ceil(Int, pop.n / options.tournament_selection_n)
 
     for i in 1:n_evol_cycles
-        if rand() > options.crossover_probability
+        if rand() > 0.25  # increased crossover: 25% vs default ~6.6%
             allstar = apply_custom_selection(pop, running_search_statistics, options)
             mutation_recorder = RecordType()
             baby, mutation_accepted, tmp_num_evals = next_generation(
