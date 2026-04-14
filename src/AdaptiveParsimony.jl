@@ -53,7 +53,7 @@ Reduce `running_search_statistics.frequencies` until it sums to
 `window_size`.
 """
 function move_window!(running_search_statistics::RunningSearchStatistics)
-    smallest_frequency_allowed = 0.1
+    smallest_frequency_allowed = 1
     max_loops = 1000
 
     frequencies = running_search_statistics.frequencies
