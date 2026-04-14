@@ -112,7 +112,7 @@ Base.@kwdef mutable struct MutationWeights <: AbstractMutationWeights
     simplify::Float64 = 0.00148
     randomize::Float64 = 0.00695
     do_nothing::Float64 = 0.431
-    optimize::Float64 = 0.1
+    optimize::Float64 = 0.0
     form_connection::Float64 = 0.5
     break_connection::Float64 = 0.1
     # Custom mutation slots (weights loaded from custom_mutations/config.toml)
