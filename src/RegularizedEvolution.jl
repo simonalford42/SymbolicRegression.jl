@@ -80,7 +80,7 @@ function reg_evol_cycle(
 
         else # Crossover
             allstar1 = apply_custom_selection(pop, running_search_statistics, options)
-            allstar2 = pop.members[rand(1:pop.n)]  # random 2nd parent for structural diversity
+            allstar2 = apply_custom_selection(pop, running_search_statistics, options)
 
             crossover_recorder = RecordType()
             baby1, baby2, crossover_accepted, tmp_num_evals = crossover_generation(
