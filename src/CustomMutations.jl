@@ -5,13 +5,17 @@ using TOML: TOML
 using DynamicExpressions:
     AbstractExpressionNode,
     AbstractExpression,
+    AbstractNode,
     NodeSampler,
     constructorof,
     set_node!,
     get_contents,
     with_contents,
     get_child,
-    set_child!
+    set_child!,
+    count_nodes,
+    has_constants,
+    has_operators
 
 export load_custom_mutation_config,
     get_custom_mutation_weights,
@@ -125,7 +129,7 @@ function load_mutation_from_string!(name::Symbol, code::String)
 
         return func
     catch e
-        @error "Failed to load mutation '$name' from code" exception=(e, catch_backtrace())
+        @debug "Failed to load mutation '$name' from code" exception=(e, catch_backtrace())
         rethrow(e)
     end
 end

@@ -119,7 +119,7 @@ function load_selection_from_string!(name::Symbol, code::String)
 
         return func
     catch e
-        @error "Failed to load selection '$name' from code" exception=(e, catch_backtrace())
+        @debug "Failed to load selection '$name' from code" exception=(e, catch_backtrace())
         rethrow(e)
     end
 end
