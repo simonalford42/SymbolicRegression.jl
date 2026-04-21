@@ -1314,4 +1314,6 @@ redirect_stdout(devnull) do
     end
 end
 
+include("MiniSR.jl")
+
 end #module SR

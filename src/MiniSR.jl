@@ -2,8 +2,9 @@ module MiniSR
 
 using PythonCall
 using Random
-using Statistics
 using Optim
+
+_mean(v) = isempty(v) ? 0.0 : sum(v) / length(v)
 
 # ─── Node hierarchy ─────────────────────────────────────────────────────────
 
@@ -300,7 +301,7 @@ end
 
 function RegularizedEvolutionEngine(X::Matrix{Float64}, y::Vector{Float64}, cfg::EngineConfig)
     rng = Xoshiro(cfg.random_state)
-    baseline_loss = mean((y .- mean(y)) .^ 2)
+    baseline_loss = _mean((y .- _mean(y)) .^ 2)
     !isfinite(baseline_loss) && (baseline_loss = 1.0)
     return RegularizedEvolutionEngine(
         X, y, cfg, rng,
@@ -482,7 +483,7 @@ function evaluate_candidate(engine::RegularizedEvolutionEngine, tree::Node)
     if length(pred) != length(engine.y) || !all(isfinite.(pred) .& (abs.(pred) .< 1e12))
         return (Inf, Inf, tree_size(tree))
     end
-    mse = mean((engine.y .- pred) .^ 2)
+    mse = _mean((engine.y .- pred) .^ 2)
     complexity = tree_size(tree)
     cost = (mse / engine.loss_normalization) + engine.cfg.parsimony * complexity
     !isfinite(cost) && return (Inf, Inf, complexity)
@@ -858,9 +859,9 @@ function initialize_population(engine::RegularizedEvolutionEngine)
         member !== nothing && push!(pop, member)
     end
     if isempty(pop)
-        fallback_loss = mean((engine.y .- mean(engine.y)) .^ 2)
+        fallback_loss = _mean((engine.y .- _mean(engine.y)) .^ 2)
         push!(pop, Individual(
-            ConstNode(mean(engine.y)),
+            ConstNode(_mean(engine.y)),
             fallback_loss,
             (fallback_loss / engine.loss_normalization) + engine.cfg.parsimony,
             1, next_birth!(engine), next_ref!(engine), nothing,
