@@ -153,6 +153,10 @@ Base.@kwdef mutable struct EngineConfig
     constraints::Dict{Symbol, Any} = Dict{Symbol, Any}()
     nested_constraints::Dict{Symbol, Any} = Dict{Symbol, Any}()
     random_state::Int = 0
+    # If log_file is a non-empty path, run_engine appends one JSONL line per
+    # HOF update recording the cycle, eval_count, progress and full Pareto
+    # frontier. Equations use the internal x0..xN variable names.
+    log_file::String = ""
 end
 
 # Coerce Py (or Julia-native) collections at the Python interop boundary.
@@ -971,6 +975,63 @@ function calculate_pareto_frontier_from_dict(hof_by_complexity::Dict{Int, Indivi
     return dominating
 end
 
+# ── Baseline logging infra — do not remove or modify in experiments ──
+# Escape a string for JSON output. Handles the subset of characters MiniSR
+# equations actually produce (backslashes, quotes, control chars).
+function _json_escape(s::AbstractString)
+    buf = IOBuffer()
+    for c in s
+        if c == '"'
+            write(buf, "\\\"")
+        elseif c == '\\'
+            write(buf, "\\\\")
+        elseif c == '\n'
+            write(buf, "\\n")
+        elseif c == '\r'
+            write(buf, "\\r")
+        elseif c == '\t'
+            write(buf, "\\t")
+        elseif c < ' '
+            write(buf, string("\\u", lpad(string(UInt16(c), base=16), 4, '0')))
+        else
+            write(buf, c)
+        end
+    end
+    return String(take!(buf))
+end
+
+function _json_float(x::Float64)
+    if isnan(x); return "NaN"; end
+    if isinf(x); return x > 0 ? "Infinity" : "-Infinity"; end
+    return string(x)
+end
+
+function write_hof_log(engine::RegularizedEvolutionEngine, cycle::Int, dominating::Vector{Individual})
+    path = engine.cfg.log_file
+    isempty(path) && return
+    budget = engine.eval_budget
+    progress = (isnothing(budget) || budget == 0) ? 0.0 : engine.eval_count / budget
+    try
+        open(path, "a") do io
+            write(io, "{\"cycle\":", string(cycle))
+            write(io, ",\"eval_count\":", string(engine.eval_count))
+            write(io, ",\"progress\":", _json_float(progress))
+            write(io, ",\"frontier\":[")
+            for (i, m) in enumerate(dominating)
+                i > 1 && write(io, ",")
+                eqn = node_string(m.tree)
+                write(io, "{\"complexity\":", string(m.complexity))
+                write(io, ",\"loss\":", _json_float(m.loss))
+                write(io, ",\"equation\":\"", _json_escape(eqn), "\"}")
+            end
+            write(io, "]}\n")
+        end
+    catch err
+        # Don't let logging errors kill the search.
+        @warn "write_hof_log failed" path=path err=err
+    end
+end
+
 function run_engine(engine::RegularizedEvolutionEngine)
     populations = [initialize_population(engine) for _ in 1:max(1, engine.cfg.populations)]
     stats = [RunningSearchStatistics(engine.cfg.maxsize) for _ in populations]
@@ -989,6 +1050,10 @@ function run_engine(engine::RegularizedEvolutionEngine)
 
     for pop in populations
         update_hof_from_population!(pop)
+    end
+    # Baseline logging infra: snapshot initial frontier.
+    if !isempty(engine.cfg.log_file)
+        write_hof_log(engine, -1, calculate_pareto_frontier_from_dict(hof_by_complexity))
     end
 
     total_cycles = max(0, Int(engine.cfg.niterations * max(1, engine.cfg.populations)))
@@ -1012,6 +1077,8 @@ function run_engine(engine::RegularizedEvolutionEngine)
         move_window!(s)
         update_hof_from_population!(pop)
         dominating = calculate_pareto_frontier_from_dict(hof_by_complexity)
+        # Baseline logging infra: snapshot frontier after each cycle.
+        isempty(engine.cfg.log_file) || write_hof_log(engine, cycle, dominating)
         default_migration(engine, populations, j, dominating)
     end
 
@@ -1041,6 +1108,11 @@ function fit_mini_sr(X_in, y_in, variable_names_in;
     X = Matrix{Float64}(pyconvert(Array, X_in))
     y = Float64.(vec(pyconvert(Array, y_in)))
     variable_names = as_strings(variable_names_in)
+    # Normalize Py strings in kwargs (e.g. log_file) to Julia String.
+    normalized_kwargs = Dict{Symbol, Any}()
+    for (k, v) in pairs(kwargs)
+        normalized_kwargs[k] = v isa Py ? pyconvert(Any, v) : v
+    end
     cfg = EngineConfig(;
         binary_operators=as_symbols(binary_operators),
         unary_operators=as_symbols(unary_operators),
@@ -1049,7 +1121,7 @@ function fit_mini_sr(X_in, y_in, variable_names_in;
         mutation_weight_names=as_symbols(mutation_weight_names),
         constraints=as_constraints(constraints),
         nested_constraints=as_nested_constraints(nested_constraints),
-        kwargs...,
+        normalized_kwargs...,
     )
     engine = RegularizedEvolutionEngine(X, y, cfg)
     dominating, n_evals = run_engine(engine)
