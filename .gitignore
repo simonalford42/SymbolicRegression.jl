@@ -32,6 +32,11 @@ private
 # Generated examples:
 docs/src/examples/
 
+# custom operators
+src/custom_selection/*
+src/custom_survival/*
+src/custom_mutation/*
+
 
 lock.pid
 pyjuliapkg/
