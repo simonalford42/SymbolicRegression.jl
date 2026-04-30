@@ -2,6 +2,7 @@ module CustomMutationsModule
 
 using Random: AbstractRNG, default_rng
 using TOML: TOML
+using Statistics: mean, std, cor, var
 using DynamicExpressions:
     AbstractExpressionNode,
     AbstractExpression,
@@ -15,7 +16,8 @@ using DynamicExpressions:
     set_child!,
     count_nodes,
     has_constants,
-    has_operators
+    has_operators,
+    eval_tree_array
 
 export load_custom_mutation_config,
     get_custom_mutation_weights,
@@ -115,10 +117,23 @@ function load_mutation_from_string!(name::Symbol, code::String)
         Base.eval(@__MODULE__, expr)
 
         # The function should now be defined in this module
-        func = Base.eval(@__MODULE__, name)
+        raw_func = Base.eval(@__MODULE__, name)
 
-        if !isa(func, Function)
+        if !isa(raw_func, Function)
             error("Code did not define a function named '$name'")
+        end
+
+        # Support both signatures:
+        #   data-aware:  (tree, dataset, options, nfeatures, rng)  -> 5 args
+        #   structural:  (tree, options, nfeatures, rng)           -> 4 args
+        # The apply_custom_mutation call site always passes 5 args; wrap 4-arg
+        # functions so they silently drop `dataset`.
+        method_obj = first(methods(raw_func))
+        nargs = method_obj.nargs - 1  # subtract the function object itself
+        func = if nargs == 4
+            (tree, dataset, options, nfeatures, rng) -> raw_func(tree, options, nfeatures, rng)
+        else
+            raw_func
         end
 
         # Register in dynamic mutations
@@ -285,13 +300,17 @@ function list_enabled_custom_mutations()
 end
 
 """
-    apply_custom_mutation(name::Symbol, tree, options, nfeatures, rng)
+    apply_custom_mutation(name::Symbol, tree, dataset, options, nfeatures, rng)
 
-Apply a custom mutation by name to the given tree.
+Apply a custom mutation by name to the given tree. `dataset` is the
+`Dataset` being regressed (with fields `X`, `y`, `n`, `nfeatures`,
+`variable_names`, `avg_y`, ...); data-aware mutations may consult it,
+and data-unaware mutations may ignore it.
 """
 function apply_custom_mutation(
     name::Symbol,
     tree::AbstractExpressionNode,
+    dataset,
     options,
     nfeatures::Int,
     rng::AbstractRNG=default_rng(),
@@ -306,23 +325,24 @@ function apply_custom_mutation(
     end
 
     func = MUTATION_REGISTRY[name]
-    return func(tree, options, nfeatures, rng)
+    return func(tree, dataset, options, nfeatures, rng)
 end
 
 """
-    apply_custom_mutation(name::Symbol, ex::AbstractExpression, options, nfeatures, rng)
+    apply_custom_mutation(name::Symbol, ex::AbstractExpression, dataset, options, nfeatures, rng)
 
 Apply a custom mutation to an AbstractExpression wrapper.
 """
 function apply_custom_mutation(
     name::Symbol,
     ex::AbstractExpression,
+    dataset,
     options,
     nfeatures::Int,
     rng::AbstractRNG=default_rng(),
 )
     tree = get_contents(ex)
-    new_tree = apply_custom_mutation(name, tree, options, nfeatures, rng)
+    new_tree = apply_custom_mutation(name, tree, dataset, options, nfeatures, rng)
     return with_contents(ex, new_tree)
 end
 

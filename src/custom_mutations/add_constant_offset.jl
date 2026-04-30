@@ -15,13 +15,17 @@
 # to: AbstractExpressionNode, NodeSampler, constructorof, set_node!, etc.
 
 """
-    add_constant_offset(tree, options, nfeatures, rng)
+    add_constant_offset(tree, dataset, options, nfeatures, rng)
 
 Wrap a random subtree with addition of a random constant.
 `subtree` becomes `subtree + c` where `c` is sampled from normal distribution.
+
+`dataset` is accepted for signature compatibility with data-aware mutations
+but is unused here.
 """
 function add_constant_offset(
     tree::N,
+    dataset,
     options,
     nfeatures::Int,
     rng::AbstractRNG,

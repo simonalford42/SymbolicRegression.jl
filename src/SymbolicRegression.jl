@@ -238,8 +238,6 @@ using DispatchDoctor: @stable
     __dispatch_doctor_unsable_test() = Val(rand(1:10))
 end
 
-include("MiniSR.jl")
-
 using .CoreModule:
     DATA_TYPE,
     LOSS_TYPE,

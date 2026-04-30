@@ -5,13 +5,98 @@
 ```julia
 function your_mutation_name(
     tree::N,
+    dataset,
     options,
     nfeatures::Int,
     rng::AbstractRNG,
 ) where {T,N<:AbstractExpressionNode{T}}
-    # mutation logic
+    # mutation logic — may or may not consult `dataset`
     return tree  # or new root if changed
 end
+```
+
+The `dataset` argument exposes the (X, y) data being regressed so that
+"smart" mutations can make data-aware decisions (correlate features with
+residuals, fit constants, detect outliers, ...). Mutations that only
+need the tree structure should accept the argument and ignore it.
+
+---
+
+## Dataset access
+
+`dataset` is a `Dataset{T,L}` with these fields (see `Dataset.jl`):
+
+| field | type | shape / notes |
+|---|---|---|
+| `dataset.X` | `AbstractMatrix{T}` | `(nfeatures, n)` — **columns are samples** |
+| `dataset.y` | `AbstractVector{T}` or `nothing` | `(n,)` — targets; may be `nothing` for multi-output |
+| `dataset.n` | `Int` | number of samples |
+| `dataset.nfeatures` | `Int` | matches the `nfeatures` positional arg |
+| `dataset.variable_names` | `Vector{String}` | feature names |
+| `dataset.avg_y` | `Union{T,Nothing}` | precomputed `mean(y)` |
+| `dataset.weights` | `AbstractVector` or `nothing` | per-sample weights |
+
+**Guard against `nothing` y:**
+```julia
+dataset.y === nothing && return tree  # multi-output; skip data-aware logic
+```
+
+**Evaluate an expression on X:**
+```julia
+using DynamicExpressions: eval_tree_array
+y_pred, ok = eval_tree_array(tree, dataset.X, options.operators)
+ok || return tree  # evaluation failed (e.g. divide-by-zero)
+residual = dataset.y .- y_pred
+```
+
+**Pick the feature most correlated with residual:**
+```julia
+using Statistics: cor
+cors = [abs(cor(view(dataset.X, i, :), residual)) for i in 1:dataset.nfeatures]
+best_feature = argmax(cors)
+```
+
+### Data-aware recipes
+
+**Residual-guided feature insertion** — insert the feature whose residual
+correlation is highest, wrapped in `+`:
+```julia
+y_pred, ok = eval_tree_array(tree, dataset.X, options.operators)
+ok || return tree
+residual = dataset.y .- y_pred
+cors = [abs(cor(view(dataset.X, i, :), residual)) for i in 1:dataset.nfeatures]
+best_feature = argmax(cors)
+plus_idx = findfirst(op -> op == (+), options.operators.binops)
+plus_idx === nothing && return tree
+feat_node = constructorof(N)(T; feature=best_feature)
+new_root = constructorof(N)(; op=plus_idx, children=(copy(tree), feat_node))
+return new_root
+```
+
+**Outlier-aware subtree replacement** — evaluate each subtree; if any
+produces `NaN`/`Inf`, replace it with a safe constant:
+```julia
+for node in NodeSampler(; tree)
+    node.degree == 0 && continue
+    vals, ok = eval_tree_array(node, dataset.X, options.operators)
+    if !ok || any(!isfinite, vals)
+        safe = constructorof(N)(T; val=zero(T))
+        set_node!(node, safe)
+        break
+    end
+end
+return tree
+```
+
+**Constant range matching** — sample new constants from the empirical
+range of `y` instead of a standard normal:
+```julia
+has_constants(tree) || return tree
+node = rand(rng, NodeSampler(; tree, filter=t -> t.degree == 0 && t.constant))
+μ = dataset.avg_y === nothing ? zero(T) : T(dataset.avg_y)
+σ = dataset.y === nothing ? one(T) : T(std(dataset.y))
+node.val = μ + σ * randn(rng, T)
+return tree
 ```
 
 ---
@@ -19,8 +104,10 @@ end
 ## Available API
 
 ```julia
-# Imports available in custom mutations
+# Imports already in scope inside CustomMutationsModule — your mutation can
+# reference any of these names directly, no `using` needed.
 using Random: AbstractRNG
+using Statistics: mean, std, cor, var
 using DynamicExpressions:
     AbstractExpressionNode,
     NodeSampler,
@@ -30,7 +117,8 @@ using DynamicExpressions:
     has_constants,
     has_operators,
     get_child,
-    set_child!
+    set_child!,
+    eval_tree_array   # for evaluating trees/subtrees on dataset.X
 ```
 
 **Node sampling:**

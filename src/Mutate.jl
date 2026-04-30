@@ -748,11 +748,12 @@ function mutate!(
     options::AbstractOptions;
     recorder::RecordType,
     nfeatures,
+    dataset,
     kws...,
 ) where {N<:AbstractExpression,P<:PopMember}
     mutation_name = CUSTOM_MUTATION_NAMES[:custom_mutation_1]
     if mutation_name != :none
-        tree = apply_custom_mutation(mutation_name, tree, options, nfeatures)
+        tree = apply_custom_mutation(mutation_name, tree, dataset, options, nfeatures)
         @recorder recorder["type"] = "custom:$(mutation_name)"
     end
     return MutationResult{N,P}(; tree=tree)
@@ -766,11 +767,12 @@ function mutate!(
     options::AbstractOptions;
     recorder::RecordType,
     nfeatures,
+    dataset,
     kws...,
 ) where {N<:AbstractExpression,P<:PopMember}
     mutation_name = CUSTOM_MUTATION_NAMES[:custom_mutation_2]
     if mutation_name != :none
-        tree = apply_custom_mutation(mutation_name, tree, options, nfeatures)
+        tree = apply_custom_mutation(mutation_name, tree, dataset, options, nfeatures)
         @recorder recorder["type"] = "custom:$(mutation_name)"
     end
     return MutationResult{N,P}(; tree=tree)
@@ -784,11 +786,12 @@ function mutate!(
     options::AbstractOptions;
     recorder::RecordType,
     nfeatures,
+    dataset,
     kws...,
 ) where {N<:AbstractExpression,P<:PopMember}
     mutation_name = CUSTOM_MUTATION_NAMES[:custom_mutation_3]
     if mutation_name != :none
-        tree = apply_custom_mutation(mutation_name, tree, options, nfeatures)
+        tree = apply_custom_mutation(mutation_name, tree, dataset, options, nfeatures)
         @recorder recorder["type"] = "custom:$(mutation_name)"
     end
     return MutationResult{N,P}(; tree=tree)
@@ -802,11 +805,12 @@ function mutate!(
     options::AbstractOptions;
     recorder::RecordType,
     nfeatures,
+    dataset,
     kws...,
 ) where {N<:AbstractExpression,P<:PopMember}
     mutation_name = CUSTOM_MUTATION_NAMES[:custom_mutation_4]
     if mutation_name != :none
-        tree = apply_custom_mutation(mutation_name, tree, options, nfeatures)
+        tree = apply_custom_mutation(mutation_name, tree, dataset, options, nfeatures)
         @recorder recorder["type"] = "custom:$(mutation_name)"
     end
     return MutationResult{N,P}(; tree=tree)
@@ -820,11 +824,12 @@ function mutate!(
     options::AbstractOptions;
     recorder::RecordType,
     nfeatures,
+    dataset,
     kws...,
 ) where {N<:AbstractExpression,P<:PopMember}
     mutation_name = CUSTOM_MUTATION_NAMES[:custom_mutation_5]
     if mutation_name != :none
-        tree = apply_custom_mutation(mutation_name, tree, options, nfeatures)
+        tree = apply_custom_mutation(mutation_name, tree, dataset, options, nfeatures)
         @recorder recorder["type"] = "custom:$(mutation_name)"
     end
     return MutationResult{N,P}(; tree=tree)
