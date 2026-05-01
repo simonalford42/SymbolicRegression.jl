@@ -98,27 +98,3 @@ oldest2 = your_survival(pop, options; exclude_indices=[oldest1])
 ```
 
 Your function **must** respect `exclude_indices` by never returning an index that appears in it.
-
-### Pattern: Exclude and Compute
-
-```julia
-function my_survival(pop, options; exclude_indices=Int[])::Int
-    best_idx = -1
-    best_val = typemin(Float64)  # or typemax for minimization
-
-    for i in 1:(pop.n)
-        i in exclude_indices && continue
-        val = some_criterion(pop.members[i])
-        if val > best_val  # or < for minimization
-            best_val = val
-            best_idx = i
-        end
-    end
-
-    return best_idx
-end
-```
-
-### Type Assertions and Bounds Checking
-
-The dispatch function asserts `1 <= idx <= pop.n`, so ensure your function always returns a valid index.

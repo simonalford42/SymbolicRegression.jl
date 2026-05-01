@@ -36,10 +36,6 @@ need the tree structure should accept the argument and ignore it.
 | `dataset.avg_y` | `Union{T,Nothing}` | precomputed `mean(y)` |
 | `dataset.weights` | `AbstractVector` or `nothing` | per-sample weights |
 
-**Guard against `nothing` y:**
-```julia
-dataset.y === nothing && return tree  # multi-output; skip data-aware logic
-```
 
 **Evaluate an expression on X:**
 ```julia
@@ -47,56 +43,6 @@ using DynamicExpressions: eval_tree_array
 y_pred, ok = eval_tree_array(tree, dataset.X, options.operators)
 ok || return tree  # evaluation failed (e.g. divide-by-zero)
 residual = dataset.y .- y_pred
-```
-
-**Pick the feature most correlated with residual:**
-```julia
-using Statistics: cor
-cors = [abs(cor(view(dataset.X, i, :), residual)) for i in 1:dataset.nfeatures]
-best_feature = argmax(cors)
-```
-
-### Data-aware recipes
-
-**Residual-guided feature insertion** — insert the feature whose residual
-correlation is highest, wrapped in `+`:
-```julia
-y_pred, ok = eval_tree_array(tree, dataset.X, options.operators)
-ok || return tree
-residual = dataset.y .- y_pred
-cors = [abs(cor(view(dataset.X, i, :), residual)) for i in 1:dataset.nfeatures]
-best_feature = argmax(cors)
-plus_idx = findfirst(op -> op == (+), options.operators.binops)
-plus_idx === nothing && return tree
-feat_node = constructorof(N)(T; feature=best_feature)
-new_root = constructorof(N)(; op=plus_idx, children=(copy(tree), feat_node))
-return new_root
-```
-
-**Outlier-aware subtree replacement** — evaluate each subtree; if any
-produces `NaN`/`Inf`, replace it with a safe constant:
-```julia
-for node in NodeSampler(; tree)
-    node.degree == 0 && continue
-    vals, ok = eval_tree_array(node, dataset.X, options.operators)
-    if !ok || any(!isfinite, vals)
-        safe = constructorof(N)(T; val=zero(T))
-        set_node!(node, safe)
-        break
-    end
-end
-return tree
-```
-
-**Constant range matching** — sample new constants from the empirical
-range of `y` instead of a standard normal:
-```julia
-has_constants(tree) || return tree
-node = rand(rng, NodeSampler(; tree, filter=t -> t.degree == 0 && t.constant))
-μ = dataset.avg_y === nothing ? zero(T) : T(dataset.avg_y)
-σ = dataset.y === nothing ? one(T) : T(std(dataset.y))
-node.val = μ + σ * randn(rng, T)
-return tree
 ```
 
 ---
@@ -431,36 +377,5 @@ function _find_parent(tree::N, node::N) where {N<:AbstractNode}
         return false
     end
     return r[]
-end
-```
-
----
-
-## Key Patterns
-
-**Check before sampling filtered nodes:**
-```julia
-if !has_constants(tree)
-    return tree
-end
-```
-
-**Check operator exists:**
-```julia
-plus_idx = findfirst(op -> op == (+), options.operators.binops)
-if plus_idx === nothing
-    return tree
-end
-```
-
-**Use copy() when reusing subtrees as children:**
-```julia
-new_node = constructorof(N)(; op=idx, children=(copy(node), other))
-```
-
-**Return new root when creating one:**
-```julia
-if node === tree
-    return carry  # return the new root
 end
 ```

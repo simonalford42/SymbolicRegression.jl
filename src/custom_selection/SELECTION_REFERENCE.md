@@ -13,10 +13,6 @@ function your_selection_name(
 end
 ```
 
-The selection function decides **which population member is chosen as a parent** for mutation or crossover. It returns a **PopMember** (the dispatch function will `copy()` it automatically).
-
----
-
 ## Available API
 
 ```julia
@@ -135,11 +131,3 @@ function default_selection(
     return sample[chosen_idx]
 end
 ```
-
----
-
-## Key Patterns
-
-### Always Return a PopMember
-
-The dispatch function calls `copy()` on your return value, so you can return a reference to an existing member. Do not return an index.

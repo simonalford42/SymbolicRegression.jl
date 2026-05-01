@@ -223,6 +223,7 @@ using DispatchDoctor: @stable
     include("CustomMutations.jl")  # Load custom mutations before Mutate.jl
     include("CustomSurvival.jl")
     include("CustomSelection.jl")
+    include("CustomLoss.jl")
     include("Mutate.jl")
     include("RegularizedEvolution.jl")
     include("SingleIteration.jl")
@@ -316,6 +317,9 @@ using .CustomSurvivalModule: apply_custom_survival,
 using .CustomSelectionModule: apply_custom_selection,
     load_selection_from_string!, load_selection_from_file!,
     clear_dynamic_selections!, list_available_selections, reload_custom_selections!
+using .CustomLossModule: apply_custom_loss,
+    load_loss_from_string!, load_loss_from_file!,
+    clear_dynamic_losses!, list_available_losses, reload_custom_losses!
 using .SingleIterationModule: s_r_cycle, optimize_and_simplify_population
 using .ProgressBarsModule: WrappedProgressBar
 using .RecorderModule: @recorder, find_iteration_from_record
@@ -1313,5 +1317,6 @@ redirect_stdout(devnull) do
 end
 
 include("MiniSR.jl")
+include("MinimalSR.jl")
 
 end #module SR

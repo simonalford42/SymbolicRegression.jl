@@ -19,6 +19,12 @@ using ..ComplexityModule: compute_complexity
 using ..DimensionalAnalysisModule: violates_dimensional_constraints
 using ..InterfaceDynamicExpressionsModule: expected_array_type
 
+# Forward-declared hook for dynamically-loaded custom loss functions.
+# CustomLossModule mutates this ref; the eval_loss dispatcher below reads it.
+# Kept here (rather than in CustomLossModule) so eval_loss has no cross-module
+# name-resolution headache and to keep the inner loop branch-clean.
+const _ACTIVE_DYNAMIC_LOSS = Ref{Union{Nothing,Function}}(nothing)
+
 function _loss(
     ::AbstractArray{T1}, ::AbstractArray{T2}, ::LT
 ) where {T1,T2,LT<:Union{Function,SupervisedLoss}}
@@ -151,6 +157,10 @@ function eval_loss(
         f = options.loss_function_expression::Function
         @assert tree isa AbstractExpression
         evaluator(f, tree, dataset, options, idx)
+    elseif !isnothing(_ACTIVE_DYNAMIC_LOSS[])
+        f = _ACTIVE_DYNAMIC_LOSS[]::Function
+        inner_tree = tree isa AbstractExpression ? get_tree(tree) : tree
+        evaluator(f, inner_tree, dataset, options, idx)
     else
         _eval_loss(tree, dataset, options, regularization)
     end
