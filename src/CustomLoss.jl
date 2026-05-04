@@ -3,7 +3,8 @@ module CustomLossModule
 using DynamicExpressions:
     AbstractExpression, AbstractExpressionNode, get_tree, eval_tree_array
 using ..CoreModule: AbstractOptions, Dataset, DATA_TYPE, LOSS_TYPE
-using ..LossFunctionsModule: _eval_loss, evaluator, _ACTIVE_DYNAMIC_LOSS
+using ..LossFunctionsModule:
+    _eval_loss, evaluator, _ACTIVE_DYNAMIC_LOSS, dimensional_regularization
 
 export apply_custom_loss,
     load_loss_from_string!,
