@@ -15,19 +15,6 @@ end
 
 The loss function is called **once per individual** during fitness evaluation. It receives the expression tree, the training dataset, and the search `options`, and must return a scalar of type `L` (typically `Float64`).
 
-A 4-arg batched form is also supported:
-
-```julia
-function your_loss_name(
-    tree, full_dataset::Dataset{T,L}, options::AbstractOptions, idx,
-)::L where {T,L}
-    # idx is a Vector{Int} of training-row indices for this batch (or nothing)
-    return loss_value
-end
-```
-
-If `idx` is provided, you can index `full_dataset.X[:, idx]` and `full_dataset.y[idx]` for batched evaluation. Most users do not need this.
-
 ---
 
 ## Available API
@@ -43,11 +30,8 @@ using ..CoreModule: AbstractOptions, Dataset, DATA_TYPE, LOSS_TYPE
 ```julia
 dataset.X        # AbstractMatrix{T} - features (n_features × n_samples)
 dataset.y        # AbstractVector{T} - targets (length n_samples)
-dataset.weights  # AbstractVector{T} or Nothing - per-sample weights (may be nothing)
 dataset.n        # Int - number of samples
 ```
-
-These work transparently on both `BasicDataset` and `SubDataset` (a lazy view used during batching).
 
 ### Tree evaluation
 
@@ -97,5 +81,7 @@ end
 > **Return `LOSS_TYPE` (typically `Float64`).** Use `L(value)` to convert.
 
 > **Handle eval failure.** When `eval_tree_array` returns `(nothing, false)`, return `L(Inf)`.
+
+> **Prefer simple and efficient options.** Evaluation is the main computational bottleneck of evolutionary algorithms. It is the "hot path" or kernel that dominates runtime. Whatever idea you choose should be comparable in calculation cost to MSE.
 
 ---
