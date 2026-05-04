@@ -92,55 +92,10 @@ end
 
 > **DO NOT penalize raw expression complexity.** Parsimony (`size * options.parsimony`) is added separately by `loss_to_cost` after your loss returns. The Pareto frontier is built using `member.loss` (your raw return), so penalizing size in the loss both double-counts complexity and distorts the size/accuracy tradeoff curve.
 
-> **Default behavior should remain MSE-like.** A custom loss should be MSE (or another fidelity term) **plus** an augmentation, not a replacement. Wildly different loss scales break the Pareto-frontier comparison and the score-function logarithmic scaling.
+> **Non-negative and lower-is-better.** PySR's default `:log` score-scaling requires non-negative losses, and Pareto/tournament logic assumes smaller = better. The absolute scale is irrelevant — `loss_to_cost` normalizes by a baseline-tree loss — so log-MSE, robust losses, etc. all work as long as the same loss is applied throughout the run.
 
 > **Return `LOSS_TYPE` (typically `Float64`).** Use `L(value)` to convert.
 
 > **Handle eval failure.** When `eval_tree_array` returns `(nothing, false)`, return `L(Inf)`.
 
-> **No automatic `dimensional_regularization`.** When a custom loss is active, the dimensional-units regularization is NOT auto-added. If you use units (`X_units` / `y_units`), call `dimensional_regularization(tree, dataset, options)` yourself and add it to your return value.
-
 ---
-
-## Augmentation Ideas
-
-These are **examples**, not prescriptions. The whole point of evolving the loss is to discover augmentations that work better than MSE on average across our task suite.
-
-### Entropy / diversity bonus
-
-Discourage low-information expressions like `((x0 - x0) + (x0 + (x0 - (x0 + (x0 - x0))))) * (...)`. Reward expressions that touch more distinct variables, use a variety of operators, or reduce to a non-constant function. For example:
-
-```julia
-function mse_with_diversity_bonus(tree, dataset, options)
-    prediction, completed = eval_tree_array(tree, dataset.X, options)
-    if !completed || isnothing(prediction)
-        return Float64(Inf)
-    end
-    mse = sum(abs2, prediction .- dataset.y) / length(dataset.y)
-
-    # Cheap diversity proxy: variance of predictions. A constant tree has
-    # variance 0; a tree that actually uses inputs has positive variance.
-    pred_var = sum(abs2, prediction .- (sum(prediction) / length(prediction))) / length(prediction)
-    diversity_bonus = pred_var < 1e-10 ? 1.0 : 0.0  # Inf-ish penalty if collapsed to a constant
-
-    return mse + 0.1 * diversity_bonus
-end
-```
-
-### Robust losses
-
-Huber / log-cosh / quantile loss for noisy targets. Useful when y has outliers.
-
-### Scale-aware losses
-
-Log-MSE or relative-MSE for problems with wide y-ranges where MSE is dominated by large-y points.
-
-### Train/holdout disagreement (advanced)
-
-Use the 4-arg batched form to penalize predictions whose holdout error diverges from training error — a soft anti-overfitting term.
-
----
-
-## Multiprocessing Caveat
-
-The active loss function is held in a module-global ref (`_ACTIVE_DYNAMIC_LOSS`). In Julia threading mode (the PySR default), all threads share this ref and a single `load_loss_from_string!` is enough. In `:multiprocessing` mode, each worker process has its own copy of the module — you must arrange to load the loss on each worker (e.g. via `@everywhere`) before search starts. The same caveat applies to the existing `CustomMutationsModule` / `CustomSurvivalModule` / `CustomSelectionModule`.
