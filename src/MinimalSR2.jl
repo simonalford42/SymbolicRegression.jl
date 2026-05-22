@@ -71,9 +71,9 @@ Base.@kwdef struct MinimalSRPolicy
     mutation::Function
     acceptance::Function
     crossover::Function
-    update_archive::Function
+    update_archive!::Function
     update_population::Function
-    update_stats::Function
+    update_stats!::Function
 end
 
 Base.@kwdef struct MinimalSRConfig
@@ -89,40 +89,40 @@ end
 # mutation(parent, state, config) -> tree | nothing
 # acceptance(parent, child, state, config) -> Bool
 # crossover(parent_a, parent_b, state, config) -> tree | nothing
-# update_archive(archive, populations, state, config) -> Archive
+# update_archive!(archive, populations, state, config) -> nothing
 # update_population(archive, populations, state, config) -> Vector{Population}
-# update_stats(populations, state, config) -> SearchStats
+# update_stats!(populations, state, config) -> nothing
 
 # These contracts are intentionally state-rich. The callbacks can ignore state
 # for Basic behavior, or use stats/frequencies/archive for PySR. Any temperature
-# or annealing state is policy-specific data owned by `update_stats`.
+# or annealing state is policy-specific data owned by `update_stats!`.
 
 # ─── Generic engine ─────────────────────────────────────────────────────────
 
 function fit_minimal_sr2(X, y, variable_names; config::MinimalSRConfig)
     state = initialize_state(X, y, variable_names, config)
     initialize_populations!(state, X, y, config)
-    state.archive = config.policy.update_archive(state.archive, state.populations, state, config)
+    config.policy.update_archive!(state.archive, state.populations, state, config)
 
     for iteration in 1:config.h.niterations
         has_budget(state, config) || break
-        state.stats = config.policy.update_stats(state.populations, state, config)
+        config.policy.update_stats!(state.populations, state, config)
 
         for pop_index in eachindex(state.populations)
             for _cycle in 1:config.h.ncycles_per_iteration
                 regularized_cycle!(state, pop_index, X, y, config)
-                state.stats = config.policy.update_stats(state.populations, state, config)
+                config.policy.update_stats!(state.populations, state, config)
                 has_budget(state, config) || break
             end
             has_budget(state, config) || break
         end
 
         optimize_and_simplify_populations!(state.populations, X, y, state, config)
-        state.archive = config.policy.update_archive(state.archive, state.populations, state, config)
+        config.policy.update_archive!(state.archive, state.populations, state, config)
         state.populations = config.policy.update_population(
             state.archive, state.populations, state, config
         )
-        state.stats = config.policy.update_stats(state.populations, state, config)
+        config.policy.update_stats!(state.populations, state, config)
     end
 
     return format_result(state.archive, state, config)
@@ -191,7 +191,7 @@ function basic_acceptance(parent, child, state, config)
     return true
 end
 
-function basic_update_archive(archive, populations, state, config)
+function basic_update_archive!(archive, populations, state, config)
     # All-time top-k by loss/cost.
 end
 
@@ -200,9 +200,8 @@ function basic_update_population(archive, populations, state, config)
     return populations
 end
 
-function basic_update_stats(populations, state, config)
+function basic_update_stats!(populations, state, config)
     # No running statistics.
-    return state.stats
 end
 
 function basic_config(; kwargs...)
@@ -225,9 +224,9 @@ function basic_config(; kwargs...)
         mutation=basic_mutation,
         acceptance=basic_acceptance,
         crossover=basic_crossover,
-        update_archive=basic_update_archive,
+        update_archive! = basic_update_archive!,
         update_population=basic_update_population,
-        update_stats=basic_update_stats,
+        update_stats! = basic_update_stats!,
     )
     return MinimalSRConfig(; h, policy)
 end
@@ -265,7 +264,7 @@ function pysr_acceptance(parent, child, state, config)
     # Frequency factor old_frequency / new_frequency when use_frequency is set.
 end
 
-function pysr_update_archive(archive, populations, state, config)
+function pysr_update_archive!(archive, populations, state, config)
     # Maintain best-by-complexity, then expose Pareto frontier by complexity/loss.
 end
 
@@ -275,7 +274,7 @@ function pysr_update_population(archive, populations, state, config)
     # separate migration branches.
 end
 
-function pysr_update_stats(populations, state, config)
+function pysr_update_stats!(populations, state, config)
     # Update running complexity frequencies, normalize them, move the approximate
     # window, and track counters needed by PySR-compatible selection/acceptance.
     # This is also where PySR-specific temperature/annealing state is advanced.
@@ -306,9 +305,9 @@ function pysr_config(; kwargs...)
         mutation=pysr_mutation,
         acceptance=pysr_acceptance,
         crossover=pysr_crossover,
-        update_archive=pysr_update_archive,
+        update_archive! = pysr_update_archive!,
         update_population=pysr_update_population,
-        update_stats=pysr_update_stats,
+        update_stats! = pysr_update_stats!,
     )
     return MinimalSRConfig(; h, policy)
 end
@@ -318,7 +317,7 @@ end
 # Resolved design choices:
 #
 # 1. The engine is multi-population by default. `update_population` and
-#    `update_stats` receive the full `Vector{Population}` so PySR can express
+#    `update_stats!` receive the full `Vector{Population}` so PySR can express
 #    subpopulation migration and archive/HOF migration without special engine
 #    branches. Basic config sets `populations=1` or makes these callbacks no-op.
 #
@@ -326,16 +325,16 @@ end
 #    by hyperparameters, not policy callbacks. Both Basic and PySR pass through
 #    the same `optimize_and_simplify_populations!` hook.
 #
-# 3. `update_archive` runs after the local evolution plus common optimize/
+# 3. `update_archive!` runs after the local evolution plus common optimize/
 #    simplify step. `update_population` runs after archive update, then
-#    `update_stats` observes the post-migration populations. If exact MiniSR
+#    `update_stats!` observes the post-migration populations. If exact MiniSR
 #    parity requires pre-migration stats, the least invasive adjustment is to
-#    move `update_stats` before `update_population` in the generic loop.
+#    move `update_stats!` before `update_population` in the generic loop.
 #
 # 4. Acceptance remains parent-child, before survival. Survival receives only
 #    accepted children and decides which population members remain. Temperature
 #    is not a generic engine concept; PySR acceptance reads it from `state.stats`,
-#    and PySR `update_stats` decides how and when to advance it.
+#    and PySR `update_stats!` decides how and when to advance it.
 #
 # Still open:
 #
