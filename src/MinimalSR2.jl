@@ -9,46 +9,45 @@ const Population = Vector{Individual}
 
 # ─── State/config ───────────────────────────────────────────────────────────
 
-abstract type AbstractArchiveState end
-abstract type AbstractSearchStatsState end
+abstract type AbstractPolicyState end
 
-mutable struct BasicArchiveState <: AbstractArchiveState
-    members::Vector{Individual}
+mutable struct BasicPolicyState <: AbstractPolicyState
+    archive::Vector{Individual}
+    archive_initialized::Bool
+    archive_counted_population_cycles::Vector{Int}
 end
 
-BasicArchiveState() = BasicArchiveState(Individual[])
+function BasicPolicyState(cfg::MS.EngineConfig)
+    return BasicPolicyState(Individual[], false, zeros(Int, max(1, cfg.populations)))
+end
 
-struct BasicStatsState <: AbstractSearchStatsState end
-
-mutable struct PySRArchiveState <: AbstractArchiveState
+mutable struct PySRPolicyState <: AbstractPolicyState
     best_by_complexity::Dict{Int, Individual}
     frontier::Vector{Individual}
-end
-
-PySRArchiveState() = PySRArchiveState(Dict{Int, Individual}(), Individual[])
-
-mutable struct PySRStatsState <: AbstractSearchStatsState
-    per_population::Vector{MS.RunningSearchStatistics}
+    per_population_stats::Vector{MS.RunningSearchStatistics}
     current_temperature::Float64
     counted_population_cycles::Vector{Int}
+    archive_initialized::Bool
+    archive_counted_population_cycles::Vector{Int}
 end
 
-function PySRStatsState(cfg::MS.EngineConfig)
-    return PySRStatsState(
-        [MS.RunningSearchStatistics(cfg.maxsize) for _ in 1:max(1, cfg.populations)],
+function PySRPolicyState(cfg::MS.EngineConfig)
+    n = max(1, cfg.populations)
+    return PySRPolicyState(
+        Dict{Int, Individual}(),
+        Individual[],
+        [MS.RunningSearchStatistics(cfg.maxsize) for _ in 1:n],
         1.0,
-        zeros(Int, max(1, cfg.populations)),
+        zeros(Int, n),
+        false,
+        zeros(Int, n),
     )
 end
 
-mutable struct EngineState{
-    A<:AbstractArchiveState,
-    S<:AbstractSearchStatsState,
-}
+mutable struct EngineState{P<:AbstractPolicyState}
     engine::MS.RegularizedEvolutionEngine
     populations::Vector{Population}
-    archive::A
-    stats::S
+    policy_state::P
     current_iteration::Int
     current_population::Int
     current_inner_cycle::Int
@@ -56,17 +55,15 @@ mutable struct EngineState{
 end
 
 Base.@kwdef struct MinimalSRPolicy
-    init_archive::Function
-    init_stats::Function
+    init_state::Function
     loss_function::Function
     survival::Function
     selection::Function
     mutation::Function
     acceptance::Function
     crossover::Function
-    update_archive!::Function
     update_population::Function
-    update_stats!::Function
+    update_state!::Function
 end
 
 Base.@kwdef struct MinimalSRConfig
@@ -75,11 +72,11 @@ Base.@kwdef struct MinimalSRConfig
 end
 
 engine(state::EngineState) = state.engine
-current_stats(state::EngineState{<:AbstractArchiveState, PySRStatsState}) =
-    state.stats.per_population[state.current_population]
+current_stats(state::EngineState{PySRPolicyState}) =
+    state.policy_state.per_population_stats[state.current_population]
 
-archive_members(archive::BasicArchiveState) = archive.members
-archive_members(archive::PySRArchiveState) = archive.frontier
+result_members(policy_state::BasicPolicyState) = policy_state.archive
+result_members(policy_state::PySRPolicyState) = policy_state.frontier
 
 function engine_config_from_kwargs(; kwargs...)
     return MS.EngineConfig(; kwargs...)
@@ -98,13 +95,11 @@ end
 function initialize_state(X, y, variable_names, config::MinimalSRConfig)
     _ = variable_names
     eng = MS.RegularizedEvolutionEngine(Matrix{Float64}(X), Float64.(vec(y)), config.engine_config)
-    archive = config.policy.init_archive(config)
-    stats = config.policy.init_stats(config)
+    policy_state = config.policy.init_state(config)
     return EngineState(
         eng,
         Population[],
-        archive,
-        stats,
+        policy_state,
         0,
         1,
         1,
@@ -160,7 +155,7 @@ function fit_minimal_sr2(X_in, y_in, variable_names_in; config::MinimalSRConfig)
     variable_names = MS.as_strings(variable_names_in)
     state = initialize_state(X, y, variable_names, config)
     initialize_populations!(state, X, y, config)
-    config.policy.update_archive!(state.archive, state.populations, state, config)
+    config.policy.update_state!(state.populations, state, config)
 
     for iteration in 1:config.engine_config.niterations
         has_budget(state, config) || break
@@ -173,7 +168,7 @@ function fit_minimal_sr2(X_in, y_in, variable_names_in; config::MinimalSRConfig)
             for inner in 1:max(1, config.engine_config.ncycles_per_iteration)
                 has_budget(state, config) || break
                 state.current_inner_cycle = inner
-                config.policy.update_stats!(state.populations, state, config)
+                config.policy.update_state!(state.populations, state, config)
                 regularized_cycle!(state, pop_index, X, y, config)
             end
 
@@ -181,15 +176,14 @@ function fit_minimal_sr2(X_in, y_in, variable_names_in; config::MinimalSRConfig)
                 state.populations[pop_index], state, config
             )
             state.completed_population_cycles[pop_index] += 1
-            config.policy.update_archive!(state.archive, state.populations, state, config)
-            config.policy.update_stats!(state.populations, state, config)
+            config.policy.update_state!(state.populations, state, config)
             state.populations = config.policy.update_population(
-                state.archive, state.populations, state, config
+                state.policy_state, state.populations, state, config
             )
         end
     end
 
-    return format_result(state.archive, state, variable_names)
+    return format_result(state.policy_state, state, variable_names)
 end
 
 function regularized_cycle!(state::EngineState, pop_index::Int, X, y, config::MinimalSRConfig)
@@ -248,10 +242,10 @@ function optimize_and_simplify_population!(
 end
 
 function format_result(
-    archive::AbstractArchiveState, state::EngineState, variable_names::Vector{String}
+    policy_state::AbstractPolicyState, state::EngineState, variable_names::Vector{String}
 )
     rows = Vector{Dict{String, Any}}()
-    members = archive_members(archive)
+    members = result_members(policy_state)
     if isempty(members)
         best = state.populations[1][1]
         for pop in state.populations, member in pop
@@ -304,48 +298,57 @@ function basic_mutation(parent::Individual, state::EngineState, _config::Minimal
     return MS.default_replace_subtree_mutation(state.engine, parent)
 end
 
-init_basic_archive(_config::MinimalSRConfig) = BasicArchiveState()
-init_basic_stats(_config::MinimalSRConfig) = BasicStatsState()
+init_basic_state(config::MinimalSRConfig) = BasicPolicyState(config.engine_config)
 
-function basic_update_archive!(archive::BasicArchiveState, populations::Vector{Population},
-                               _state::EngineState, config::MinimalSRConfig)
-    combined = copy(archive.members)
-    for pop in populations
-        append!(combined, copy.(pop))
+function basic_update_state!(populations::Vector{Population}, state::EngineState{BasicPolicyState},
+                             config::MinimalSRConfig)
+    policy_state = state.policy_state
+    pop_indices = if !policy_state.archive_initialized
+        collect(eachindex(populations))
+    else
+        [
+            i for i in eachindex(populations) if
+            state.completed_population_cycles[i] > policy_state.archive_counted_population_cycles[i]
+        ]
+    end
+    isempty(pop_indices) && return nothing
+
+    combined = copy(policy_state.archive)
+    for i in pop_indices
+        append!(combined, copy.(populations[i]))
     end
     sort!(combined, by=m -> (m.loss, m.cost, m.complexity, m.birth))
-    empty!(archive.members)
+    empty!(policy_state.archive)
     seen = Set{String}()
     for member in combined
         isfinite(member.loss) || continue
         key = MS.node_string(member.tree)
         key in seen && continue
         push!(seen, key)
-        push!(archive.members, copy(member))
-        length(archive.members) >= max(1, config.engine_config.topn) && break
+        push!(policy_state.archive, copy(member))
+        length(policy_state.archive) >= max(1, config.engine_config.topn) && break
     end
+    for i in pop_indices
+        policy_state.archive_counted_population_cycles[i] = state.completed_population_cycles[i]
+    end
+    policy_state.archive_initialized = true
     return nothing
 end
 
-basic_update_population(_archive::BasicArchiveState, populations::Vector{Population},
+basic_update_population(_policy_state::BasicPolicyState, populations::Vector{Population},
                         _state::EngineState, _config::MinimalSRConfig) = populations
-
-basic_update_stats!(_populations::Vector{Population}, _state::EngineState,
-                    _config::MinimalSRConfig) = nothing
 
 function basic_policy()
     return MinimalSRPolicy(;
-        init_archive=init_basic_archive,
-        init_stats=init_basic_stats,
+        init_state=init_basic_state,
         loss_function=mse_loss_function,
         survival=basic_survival,
         selection=basic_selection,
         mutation=basic_mutation,
         acceptance=always_accept,
         crossover=subtree_swap_crossover,
-        update_archive! = basic_update_archive!,
         update_population=basic_update_population,
-        update_stats! = basic_update_stats!,
+        update_state! = basic_update_state!,
     )
 end
 
@@ -386,73 +389,83 @@ end
 function pysr_acceptance(parent::Individual, child::Individual, state::EngineState,
                          _config::MinimalSRConfig)
     return MS.accept_candidate(
-        state.engine, parent, child, current_stats(state), state.stats.current_temperature
+        state.engine, parent, child, current_stats(state), state.policy_state.current_temperature
     )
 end
 
-init_pysr_archive(_config::MinimalSRConfig) = PySRArchiveState()
-init_pysr_stats(config::MinimalSRConfig) = PySRStatsState(config.engine_config)
+init_pysr_state(config::MinimalSRConfig) = PySRPolicyState(config.engine_config)
 
-function pysr_update_archive!(archive::PySRArchiveState, populations::Vector{Population},
-                              _state::EngineState, config::MinimalSRConfig)
-    for pop in populations, member in pop
-        c = member.complexity
-        1 <= c <= config.engine_config.maxsize || continue
-        best = get(archive.best_by_complexity, c, nothing)
-        if isnothing(best) || member.loss < best.loss
-            archive.best_by_complexity[c] = copy(member)
-        end
-    end
-    archive.frontier = MS.calculate_pareto_frontier_from_dict(archive.best_by_complexity)
-    return nothing
-end
-
-function pysr_update_population(archive::PySRArchiveState, populations::Vector{Population},
-                                state::EngineState, _config::MinimalSRConfig)
-    MS.default_migration(state.engine, populations, state.current_population, archive.frontier)
-    return populations
-end
-
-function pysr_update_stats!(populations::Vector{Population}, state::EngineState,
+function pysr_update_state!(populations::Vector{Population}, state::EngineState{PySRPolicyState},
                             config::MinimalSRConfig)
+    policy_state = state.policy_state
+    archive_pop_indices = if !policy_state.archive_initialized
+        collect(eachindex(populations))
+    else
+        [
+            i for i in eachindex(populations) if
+            state.completed_population_cycles[i] > policy_state.archive_counted_population_cycles[i]
+        ]
+    end
+    if !isempty(archive_pop_indices)
+        for i in archive_pop_indices, member in populations[i]
+            c = member.complexity
+            1 <= c <= config.engine_config.maxsize || continue
+            best = get(policy_state.best_by_complexity, c, nothing)
+            if isnothing(best) || member.loss < best.loss
+                policy_state.best_by_complexity[c] = copy(member)
+            end
+        end
+        policy_state.frontier = MS.calculate_pareto_frontier_from_dict(
+            policy_state.best_by_complexity
+        )
+        for i in archive_pop_indices
+            policy_state.archive_counted_population_cycles[i] = state.completed_population_cycles[i]
+        end
+        policy_state.archive_initialized = true
+    end
+
     cfg = config.engine_config
     stats = current_stats(state)
 
     MS.normalize!(stats)
     if cfg.annealing && cfg.ncycles_per_iteration > 1
         denom = max(1, cfg.ncycles_per_iteration - 1)
-        state.stats.current_temperature = 1.0 - (state.current_inner_cycle - 1) / denom
+        policy_state.current_temperature = 1.0 - (state.current_inner_cycle - 1) / denom
     else
-        state.stats.current_temperature = 1.0
+        policy_state.current_temperature = 1.0
     end
-    state.engine.current_temperature = clamp(state.stats.current_temperature, 0.0, 1.0)
+    state.engine.current_temperature = clamp(policy_state.current_temperature, 0.0, 1.0)
 
     pop_idx = state.current_population
     completed = state.completed_population_cycles[pop_idx]
-    if completed > state.stats.counted_population_cycles[pop_idx]
+    if completed > policy_state.counted_population_cycles[pop_idx]
         pop = populations[state.current_population]
         for member in pop
             MS.update_size!(stats, member.complexity)
         end
         MS.move_window!(stats)
-        state.stats.counted_population_cycles[pop_idx] = completed
+        policy_state.counted_population_cycles[pop_idx] = completed
     end
     return nothing
 end
 
+function pysr_update_population(policy_state::PySRPolicyState, populations::Vector{Population},
+                                state::EngineState, _config::MinimalSRConfig)
+    MS.default_migration(state.engine, populations, state.current_population, policy_state.frontier)
+    return populations
+end
+
 function pysr_policy()
     return MinimalSRPolicy(;
-        init_archive=init_pysr_archive,
-        init_stats=init_pysr_stats,
+        init_state=init_pysr_state,
         loss_function=mse_loss_function,
         survival=pysr_survival,
         selection=pysr_selection,
         mutation=pysr_mutation,
         acceptance=pysr_acceptance,
         crossover=subtree_swap_crossover,
-        update_archive! = pysr_update_archive!,
         update_population=pysr_update_population,
-        update_stats! = pysr_update_stats!,
+        update_state! = pysr_update_state!,
     )
 end
 
