@@ -1,67 +1,39 @@
 module MinimalSR2
 
-# This file is intentionally broad pseudocode. It sketches a second MinimalSR
-# architecture where the engine loop is policy-neutral and Basic/PySR behavior
-# is expressed only by hyperparameters plus a fixed set of callback functions.
+import ..MinimalSR
 
-# ─── Core data ──────────────────────────────────────────────────────────────
+const MS = MinimalSR
+const Node = MS.Node
+const Individual = MS.Individual
+const Population = Vector{Individual}
 
-abstract type AbstractNode end
-
-struct Individual
-    tree::AbstractNode
-    loss::Float64
-    cost::Float64
-    complexity::Int
-    birth::Int
-    parent_ref::Union{Int, Nothing}
-end
-
-mutable struct Population
-    members::Vector{Individual}
-end
+# ─── State/config ───────────────────────────────────────────────────────────
 
 mutable struct Archive
     members::Vector{Individual}
+    best_by_complexity::Dict{Int, Individual}
+    frontier::Vector{Individual}
 end
 
+Archive() = Archive(Individual[], Dict{Int, Individual}(), Individual[])
+
 mutable struct SearchStats
+    per_population::Vector{MS.RunningSearchStatistics}
+    current_temperature::Float64
     data::Dict{Symbol, Any}
 end
 
+SearchStats() = SearchStats(MS.RunningSearchStatistics[], 1.0, Dict{Symbol, Any}())
+
 mutable struct EngineState
+    engine::MS.RegularizedEvolutionEngine
     populations::Vector{Population}
     archive::Archive
     stats::SearchStats
-    rng
-    birth_counter::Int
-    eval_count::Int
-end
-
-Base.@kwdef struct Hyperparameters
-    population_size::Int = 100
-    populations::Int = 1
-    niterations::Int = 100
-    ncycles_per_iteration::Int = 10
-    maxsize::Int = 30
-    maxdepth::Int = 10
-    topn::Int = 10
-    crossover_probability::Float64 = 0.0
-    tournament_selection_n::Int = 2
-    tournament_selection_p::Float64 = 1.0
-    archive_fraction_replaced::Float64 = 0.0
-    migration_fraction_replaced::Float64 = 0.0
-    annealing::Bool = false
-    alpha::Float64 = 1.0
-    should_simplify::Bool = true
-    should_optimize_constants::Bool = true
-    optimizer_iterations::Int = 8
-    optimize_probability::Float64 = 0.0
-    use_frequency::Bool = false
-    use_frequency_in_tournament::Bool = false
-    adaptive_parsimony_scaling::Float64 = 0.0
-    random_state::Int = 0
-    max_evals::Union{Int, Nothing} = nothing
+    current_iteration::Int
+    current_population::Int
+    current_inner_cycle::Int
+    stats_stage::Symbol
 end
 
 Base.@kwdef struct MinimalSRPolicy
@@ -77,269 +49,382 @@ Base.@kwdef struct MinimalSRPolicy
 end
 
 Base.@kwdef struct MinimalSRConfig
-    h::Hyperparameters = Hyperparameters()
+    engine_config::MS.EngineConfig
     policy::MinimalSRPolicy
 end
 
-# ─── Policy callback contracts ──────────────────────────────────────────────
+engine(state::EngineState) = state.engine
+current_stats(state::EngineState) = state.stats.per_population[state.current_population]
 
-# loss_function(tree, X, y, state, config) -> (; loss, cost, complexity) | nothing
-# survival(population, candidates, state, config) -> Population
-# selection(population, state, config) -> Individual
-# mutation(parent, state, config) -> tree | nothing
-# acceptance(parent, child, state, config) -> Bool
-# crossover(parent_a, parent_b, state, config) -> tree | nothing
-# update_archive!(archive, populations, state, config) -> nothing
-# update_population(archive, populations, state, config) -> Vector{Population}
-# update_stats!(populations, state, config) -> nothing
+function engine_config_from_kwargs(; kwargs...)
+    return MS.EngineConfig(; kwargs...)
+end
 
-# These contracts are intentionally state-rich. The callbacks can ignore state
-# for Basic behavior, or use stats/frequencies/archive for PySR. Any temperature
-# or annealing state is policy-specific data owned by `update_stats!`.
+function engine_config_from_namedtuple(nt::NamedTuple)
+    engine_fields = Set(fieldnames(MS.EngineConfig))
+    kwargs = Dict{Symbol, Any}()
+    for key in keys(nt)
+        key in engine_fields || continue
+        kwargs[key] = nt[key]
+    end
+    return MS.EngineConfig(; kwargs...)
+end
+
+function initialize_state(X, y, variable_names, config::MinimalSRConfig)
+    _ = variable_names
+    eng = MS.RegularizedEvolutionEngine(Matrix{Float64}(X), Float64.(vec(y)), config.engine_config)
+    return EngineState(
+        eng,
+        Population[],
+        Archive(),
+        SearchStats(),
+        0,
+        1,
+        1,
+        :init,
+    )
+end
+
+function initialize_populations!(state::EngineState, _X, _y, _config::MinimalSRConfig)
+    n = max(1, state.engine.cfg.populations)
+    state.populations = [MS.initialize_population(state.engine) for _ in 1:n]
+    state.stats.per_population = [
+        MS.RunningSearchStatistics(state.engine.cfg.maxsize) for _ in 1:n
+    ]
+    return nothing
+end
+
+has_budget(state::EngineState, _config::MinimalSRConfig) = MS.has_budget(state.engine)
+
+function cycles_for_population(population::Population, cfg::MS.EngineConfig)
+    return Int(ceil(length(population) / max(1, cfg.tournament_selection_n)))
+end
+
+should_crossover(rng, cfg::MS.EngineConfig, population::Population) =
+    length(population) >= 2 && rand(rng) <= cfg.crossover_probability
+
+function make_individual(tree::Node, _X, _y, state::EngineState, config::MinimalSRConfig;
+                         parent_ref::Union{Int, Nothing}=nothing)
+    out = config.policy.loss_function(tree, state, config)
+    out === nothing && return nothing
+    loss, cost, complexity = out
+    return Individual(
+        tree,
+        loss,
+        cost,
+        complexity,
+        MS.next_birth!(state.engine),
+        MS.next_ref!(state.engine),
+        parent_ref,
+    )
+end
+
+function trees_from_crossover_result(result)
+    result === nothing && return Node[]
+    result isa Node && return Node[result]
+    result isa Tuple && return Node[tree for tree in result if tree isa Node]
+    result isa AbstractVector && return Node[tree for tree in result if tree isa Node]
+    return Node[]
+end
 
 # ─── Generic engine ─────────────────────────────────────────────────────────
 
-function fit_minimal_sr2(X, y, variable_names; config::MinimalSRConfig)
+function fit_minimal_sr2(X_in, y_in, variable_names_in; config::MinimalSRConfig)
+    X = MS.as_matrix(X_in)
+    y = MS.as_vector(y_in)
+    variable_names = MS.as_strings(variable_names_in)
     state = initialize_state(X, y, variable_names, config)
     initialize_populations!(state, X, y, config)
     config.policy.update_archive!(state.archive, state.populations, state, config)
 
-    for iteration in 1:config.h.niterations
+    for iteration in 1:config.engine_config.niterations
         has_budget(state, config) || break
-        config.policy.update_stats!(state.populations, state, config)
+        state.current_iteration = iteration
 
         for pop_index in eachindex(state.populations)
-            for _cycle in 1:config.h.ncycles_per_iteration
-                regularized_cycle!(state, pop_index, X, y, config)
-                config.policy.update_stats!(state.populations, state, config)
-                has_budget(state, config) || break
-            end
             has_budget(state, config) || break
-        end
+            state.current_population = pop_index
 
-        optimize_and_simplify_populations!(state.populations, X, y, state, config)
-        config.policy.update_archive!(state.archive, state.populations, state, config)
-        state.populations = config.policy.update_population(
-            state.archive, state.populations, state, config
-        )
-        config.policy.update_stats!(state.populations, state, config)
+            for inner in 1:max(1, config.engine_config.ncycles_per_iteration)
+                has_budget(state, config) || break
+                state.current_inner_cycle = inner
+                state.stats_stage = :before_cycle
+                config.policy.update_stats!(state.populations, state, config)
+                regularized_cycle!(state, pop_index, X, y, config)
+            end
+
+            has_budget(state, config) && optimize_and_simplify_population!(
+                state.populations[pop_index], state, config
+            )
+            config.policy.update_archive!(state.archive, state.populations, state, config)
+            state.stats_stage = :after_population
+            config.policy.update_stats!(state.populations, state, config)
+            state.populations = config.policy.update_population(
+                state.archive, state.populations, state, config
+            )
+        end
     end
 
-    return format_result(state.archive, state, config)
+    return format_result(state.archive, state, variable_names)
 end
 
 function regularized_cycle!(state::EngineState, pop_index::Int, X, y, config::MinimalSRConfig)
-    h = config.h
-    p = config.policy
+    cfg = config.engine_config
+    policy = config.policy
     population = state.populations[pop_index]
-    ncycles = cycles_for_population(population, h)
 
-    for _ in 1:ncycles
+    for _ in 1:cycles_for_population(population, cfg)
         has_budget(state, config) || break
 
-        parent = p.selection(population, state, config)
-        child_tree = if should_crossover(state.rng, h)
-            other_parent = p.selection(population, state, config)
-            p.crossover(parent, other_parent, state, config)
+        if should_crossover(state.engine.rng, cfg, population)
+            parent_a = policy.selection(population, state, config)
+            parent_b = policy.selection(population, state, config)
+            result = policy.crossover(parent_a, parent_b, state, config)
+            candidates = Individual[]
+            for (tree, parent) in zip(trees_from_crossover_result(result), (parent_a, parent_b))
+                child = make_individual(tree, X, y, state, config; parent_ref=parent.ref)
+                child === nothing && return state
+                push!(candidates, child)
+            end
+            isempty(candidates) && cfg.skip_mutation_failures && continue
+            state.populations[pop_index] = policy.survival(population, candidates, state, config)
         else
-            p.mutation(parent, state, config)
+            parent = policy.selection(population, state, config)
+            child_tree = policy.mutation(parent, state, config)
+            if child_tree === nothing
+                cfg.skip_mutation_failures && continue
+                replacement = MS.spawn_from_existing(state.engine, parent)
+                state.populations[pop_index] = policy.survival(
+                    population, [replacement], state, config
+                )
+            else
+                child = make_individual(child_tree, X, y, state, config; parent_ref=parent.ref)
+                child === nothing && return state
+                if policy.acceptance(parent, child, state, config)
+                    state.populations[pop_index] = policy.survival(
+                        population, [child], state, config
+                    )
+                elseif !cfg.skip_mutation_failures
+                    replacement = MS.spawn_from_existing(state.engine, parent)
+                    state.populations[pop_index] = policy.survival(
+                        population, [replacement], state, config
+                    )
+                end
+            end
         end
-        child_tree === nothing && continue
-
-        child = make_individual(child_tree, X, y, state, config)
-        child === nothing && continue
-
-        if p.acceptance(parent, child, state, config)
-            state.populations[pop_index] = p.survival(population, [child], state, config)
-            population = state.populations[pop_index]
-        end
+        population = state.populations[pop_index]
     end
-
     return state
 end
 
-function optimize_and_simplify_populations!(populations, X, y, state, config)
-    # Common loop step for both Basic and PySR variants. Hyperparameters decide
-    # whether this does nothing, simplification only, constant optimization only,
-    # or both. This is intentionally not a policy callback.
+function optimize_and_simplify_population!(
+    population::Population, state::EngineState, _config::MinimalSRConfig
+)
+    return MS.optimize_and_simplify!(state.engine, population)
 end
 
-# ─── Basic config sketch ────────────────────────────────────────────────────
-
-function basic_loss_function(tree, X, y, state, config)
-    # Evaluate tree on X; return MSE plus complexity-derived cost.
+function format_result(archive::Archive, state::EngineState, variable_names::Vector{String})
+    rows = Vector{Dict{String, Any}}()
+    members = isempty(archive.frontier) ? archive.members : archive.frontier
+    if isempty(members)
+        best = state.populations[1][1]
+        for pop in state.populations, member in pop
+            member.cost < best.cost && (best = member)
+        end
+        members = [best]
+    end
+    for member in sort(members, by=m -> m.complexity)
+        eqn = MS.node_string(member.tree)
+        for i in reverse(eachindex(variable_names))
+            eqn = replace(eqn, Regex("\\bx$(i - 1)\\b") => variable_names[i])
+        end
+        push!(rows, Dict("complexity" => member.complexity, "loss" => member.loss, "equation" => eqn))
+    end
+    return Dict("rows" => rows, "n_evals" => state.engine.eval_count)
 end
 
-function basic_selection(population, state, config)
-    # n=2 tournament; pick the lower-cost individual.
+# ─── Shared callbacks ───────────────────────────────────────────────────────
+
+mse_loss_function(tree::Node, state::EngineState, _config::MinimalSRConfig) =
+    MS.evaluate_candidate(state.engine, tree)
+
+always_accept(_parent::Individual, _child::Individual, _state::EngineState, _config::MinimalSRConfig) =
+    true
+
+function subtree_swap_crossover(parent_a::Individual, parent_b::Individual, state::EngineState,
+                                _config::MinimalSRConfig)
+    for _attempt in 1:10
+        t1, t2 = MS.default_crossover(state.engine, parent_a.tree, parent_b.tree)
+        MS.valid_tree(state.engine, t1) && MS.valid_tree(state.engine, t2) && return (t1, t2)
+    end
+    return nothing
 end
 
-function basic_survival(population, candidates, state, config)
-    # Append candidates; keep top-k / population_size by fitness.
+# ─── Basic policy ───────────────────────────────────────────────────────────
+
+function basic_selection(population::Population, state::EngineState, config::MinimalSRConfig)
+    idx = MS.simple_tournament_select(population, config.engine_config, state.engine.rng)
+    return population[idx]
 end
 
-function basic_mutation(parent, state, config)
-    # Replace one random node with a terminal or small random subtree.
+function basic_survival(population::Population, candidates::Vector{Individual},
+                        _state::EngineState, config::MinimalSRConfig)
+    output = copy(population)
+    MS.topk_survive!(output, candidates, config.engine_config)
+    return output
 end
 
-function basic_crossover(parent_a, parent_b, state, config)
-    # Swap random subtrees.
+function basic_mutation(parent::Individual, state::EngineState, _config::MinimalSRConfig)
+    return MS.default_replace_subtree_mutation(state.engine, parent)
 end
 
-function basic_acceptance(parent, child, state, config)
-    # Always accept valid children; survival decides whether they remain.
-    return true
+function basic_update_archive!(archive::Archive, populations::Vector{Population},
+                               _state::EngineState, config::MinimalSRConfig)
+    combined = copy(archive.members)
+    for pop in populations
+        append!(combined, copy.(pop))
+    end
+    sort!(combined, by=m -> (m.loss, m.cost, m.complexity, m.birth))
+    empty!(archive.members)
+    seen = Set{String}()
+    for member in combined
+        isfinite(member.loss) || continue
+        key = MS.node_string(member.tree)
+        key in seen && continue
+        push!(seen, key)
+        push!(archive.members, copy(member))
+        length(archive.members) >= max(1, config.engine_config.topn) && break
+    end
+    archive.frontier = copy.(archive.members)
+    return nothing
 end
 
-function basic_update_archive!(archive, populations, state, config)
-    # All-time top-k by loss/cost.
-end
+basic_update_population(_archive::Archive, populations::Vector{Population},
+                        _state::EngineState, _config::MinimalSRConfig) = populations
 
-function basic_update_population(archive, populations, state, config)
-    # No archive migration or population rewrite.
-    return populations
-end
+basic_update_stats!(_populations::Vector{Population}, _state::EngineState,
+                    _config::MinimalSRConfig) = nothing
 
-function basic_update_stats!(populations, state, config)
-    # No running statistics.
-end
-
-function basic_config(; kwargs...)
-    h = Hyperparameters(;
-        tournament_selection_n=2,
-        tournament_selection_p=1.0,
-        crossover_probability=0.0,
-        archive_fraction_replaced=0.0,
-        migration_fraction_replaced=0.0,
-        should_simplify=true,
-        should_optimize_constants=true,
-        use_frequency=false,
-        use_frequency_in_tournament=false,
-        kwargs...,
-    )
-    policy = MinimalSRPolicy(;
-        loss_function=basic_loss_function,
+function basic_policy()
+    return MinimalSRPolicy(;
+        loss_function=mse_loss_function,
         survival=basic_survival,
         selection=basic_selection,
         mutation=basic_mutation,
-        acceptance=basic_acceptance,
-        crossover=basic_crossover,
+        acceptance=always_accept,
+        crossover=subtree_swap_crossover,
         update_archive! = basic_update_archive!,
         update_population=basic_update_population,
         update_stats! = basic_update_stats!,
     )
-    return MinimalSRConfig(; h, policy)
 end
 
-# ─── PySR-compatible config sketch ──────────────────────────────────────────
-
-function pysr_loss_function(tree, X, y, state, config)
-    # MSE with PySR-compatible cost/parsimony handling.
+function default_minimal_config(; kwargs...)
+    nt = MS.default_minimal_config(; kwargs...)
+    cfg = engine_config_from_namedtuple(nt)
+    return MinimalSRConfig(; engine_config=cfg, policy=basic_policy())
 end
 
-function pysr_selection(population, state, config)
-    # Adaptive-parsimony tournament selection. Uses normalized complexity
-    # frequencies in state.stats when use_frequency_in_tournament is enabled.
+fit_default_sr(args...; kwargs...) =
+    fit_minimal_sr2(args...; config=default_minimal_config(; kwargs...))
+
+# ─── PySR-compatible policy ─────────────────────────────────────────────────
+
+function pysr_selection(population::Population, state::EngineState, config::MinimalSRConfig)
+    stats = current_stats(state)
+    idx = MS.tournament_select(population, stats, config.engine_config, state.engine.rng)
+    return population[idx]
 end
 
-function pysr_survival(population, candidates, state, config)
-    # Age-regularized survival: insert accepted candidate, remove oldest member
-    # outside any protected set needed by the selection/survival contract.
+function pysr_survival(population::Population, candidates::Vector{Individual},
+                       state::EngineState, _config::MinimalSRConfig)
+    output = copy(population)
+    used = Set{Int}()
+    for candidate in candidates
+        isempty(output) && break
+        victim = MS.oldest_survival(output, state.engine.rng, used)
+        push!(used, victim)
+        output[victim] = candidate
+    end
+    return output
 end
 
-function pysr_mutation(parent, state, config)
-    # One mega-mutation callback:
-    # 1. condition PySR mutation weights on parent tree and hyperparameters
-    # 2. sample mutation type once
-    # 3. retry that same mutation up to N times for validity
-    # 4. return the first valid tree or nothing
+function pysr_mutation(parent::Individual, state::EngineState, _config::MinimalSRConfig)
+    return MS.pysr_weighted_mutation(state.engine, parent)
 end
 
-function pysr_crossover(parent_a, parent_b, state, config)
-    # PySR-compatible subtree crossover, including validity retries if needed.
-end
-
-function pysr_acceptance(parent, child, state, config)
-    # Annealing factor from cost delta, alpha, and temperature stored in stats.
-    # Frequency factor old_frequency / new_frequency when use_frequency is set.
-end
-
-function pysr_update_archive!(archive, populations, state, config)
-    # Maintain best-by-complexity, then expose Pareto frontier by complexity/loss.
-end
-
-function pysr_update_population(archive, populations, state, config)
-    # Applies both PySR-style subpopulation migration and archive/HOF migration.
-    # Because this callback sees all populations, the generic engine does not need
-    # separate migration branches.
-end
-
-function pysr_update_stats!(populations, state, config)
-    # Update running complexity frequencies, normalize them, move the approximate
-    # window, and track counters needed by PySR-compatible selection/acceptance.
-    # This is also where PySR-specific temperature/annealing state is advanced.
-    # Stats may be global, per-population, or both, depending on what parity needs.
-end
-
-function pysr_config(; kwargs...)
-    h = Hyperparameters(;
-        tournament_selection_n=3,
-        tournament_selection_p=0.982,
-        crossover_probability=0.2,
-        archive_fraction_replaced=0.0614,
-        migration_fraction_replaced=0.00036,
-        annealing=false,
-        alpha=3.17,
-        should_simplify=true,
-        should_optimize_constants=true,
-        optimize_probability=0.14,
-        use_frequency=true,
-        use_frequency_in_tournament=true,
-        adaptive_parsimony_scaling=1040.0,
-        kwargs...,
+function pysr_acceptance(parent::Individual, child::Individual, state::EngineState,
+                         _config::MinimalSRConfig)
+    return MS.accept_candidate(
+        state.engine, parent, child, current_stats(state), state.stats.current_temperature
     )
-    policy = MinimalSRPolicy(;
-        loss_function=pysr_loss_function,
+end
+
+function pysr_update_archive!(archive::Archive, populations::Vector{Population},
+                              _state::EngineState, config::MinimalSRConfig)
+    for pop in populations, member in pop
+        c = member.complexity
+        1 <= c <= config.engine_config.maxsize || continue
+        best = get(archive.best_by_complexity, c, nothing)
+        if isnothing(best) || member.loss < best.loss
+            archive.best_by_complexity[c] = copy(member)
+        end
+    end
+    archive.frontier = MS.calculate_pareto_frontier_from_dict(archive.best_by_complexity)
+    archive.members = copy.(archive.frontier)
+    return nothing
+end
+
+function pysr_update_population(archive::Archive, populations::Vector{Population},
+                                state::EngineState, _config::MinimalSRConfig)
+    MS.default_migration(state.engine, populations, state.current_population, archive.frontier)
+    return populations
+end
+
+function pysr_update_stats!(populations::Vector{Population}, state::EngineState,
+                            config::MinimalSRConfig)
+    cfg = config.engine_config
+    stats = current_stats(state)
+    if state.stats_stage === :before_cycle
+        MS.normalize!(stats)
+        if cfg.annealing && cfg.ncycles_per_iteration > 1
+            denom = max(1, cfg.ncycles_per_iteration - 1)
+            state.stats.current_temperature = 1.0 - (state.current_inner_cycle - 1) / denom
+        else
+            state.stats.current_temperature = 1.0
+        end
+        state.engine.current_temperature = clamp(state.stats.current_temperature, 0.0, 1.0)
+    elseif state.stats_stage === :after_population
+        pop = populations[state.current_population]
+        for member in pop
+            MS.update_size!(stats, member.complexity)
+        end
+        MS.move_window!(stats)
+    end
+    return nothing
+end
+
+function pysr_policy()
+    return MinimalSRPolicy(;
+        loss_function=mse_loss_function,
         survival=pysr_survival,
         selection=pysr_selection,
         mutation=pysr_mutation,
         acceptance=pysr_acceptance,
-        crossover=pysr_crossover,
+        crossover=subtree_swap_crossover,
         update_archive! = pysr_update_archive!,
         update_population=pysr_update_population,
         update_stats! = pysr_update_stats!,
     )
-    return MinimalSRConfig(; h, policy)
 end
 
-# ─── Open design questions ──────────────────────────────────────────────────
+function pysr_compat_config(; kwargs...)
+    nt = MS.pysr_compat_config(; kwargs...)
+    cfg = engine_config_from_namedtuple(nt)
+    return MinimalSRConfig(; engine_config=cfg, policy=pysr_policy())
+end
 
-# Resolved design choices:
-#
-# 1. The engine is multi-population by default. `update_population` and
-#    `update_stats!` receive the full `Vector{Population}` so PySR can express
-#    subpopulation migration and archive/HOF migration without special engine
-#    branches. Basic config sets `populations=1` or makes these callbacks no-op.
-#
-# 2. Simplification and constant optimization are common loop stages controlled
-#    by hyperparameters, not policy callbacks. Both Basic and PySR pass through
-#    the same `optimize_and_simplify_populations!` hook.
-#
-# 3. `update_archive!` runs after the local evolution plus common optimize/
-#    simplify step. `update_population` runs after archive update, then
-#    `update_stats!` observes the post-migration populations. If exact MiniSR
-#    parity requires pre-migration stats, the least invasive adjustment is to
-#    move `update_stats!` before `update_population` in the generic loop.
-#
-# 4. Acceptance remains parent-child, before survival. Survival receives only
-#    accepted children and decides which population members remain. Temperature
-#    is not a generic engine concept; PySR acceptance reads it from `state.stats`,
-#    and PySR `update_stats!` decides how and when to advance it.
-#
-# Still open:
-#
-# - Archive representation. Basic only needs top-k all-time; PySR likely wants
-#   best-by-complexity plus a rendered Pareto frontier. `Archive` should probably
-#   become a structured object instead of just `members::Vector{Individual}`.
+fit_pysr_compat_sr(args...; kwargs...) =
+    fit_minimal_sr2(args...; config=pysr_compat_config(; kwargs...))
 
 end # module MinimalSR2
