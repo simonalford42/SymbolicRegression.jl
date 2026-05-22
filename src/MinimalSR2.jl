@@ -87,14 +87,15 @@ end
 # survival(population, candidates, state, config) -> Population
 # selection(population, state, config) -> Individual
 # mutation(parent, state, config) -> tree | nothing
-# acceptance(parent, child, temperature, state, config) -> Bool
+# acceptance(parent, child, state, config) -> Bool
 # crossover(parent_a, parent_b, state, config) -> tree | nothing
 # update_archive(archive, populations, state, config) -> Archive
 # update_population(archive, populations, state, config) -> Vector{Population}
 # update_stats(populations, state, config) -> SearchStats
 
 # These contracts are intentionally state-rich. The callbacks can ignore state
-# for Basic behavior, or use stats/temperature/frequencies/archive for PySR.
+# for Basic behavior, or use stats/frequencies/archive for PySR. Any temperature
+# or annealing state is policy-specific data owned by `update_stats`.
 
 # ─── Generic engine ─────────────────────────────────────────────────────────
 
@@ -105,11 +106,12 @@ function fit_minimal_sr2(X, y, variable_names; config::MinimalSRConfig)
 
     for iteration in 1:config.h.niterations
         has_budget(state, config) || break
-        temperature_schedule = temperatures_for_iteration(iteration, config)
+        state.stats = config.policy.update_stats(state.populations, state, config)
 
         for pop_index in eachindex(state.populations)
-            for temperature in temperature_schedule
-                regularized_cycle!(state, pop_index, X, y, temperature, config)
+            for _cycle in 1:config.h.ncycles_per_iteration
+                regularized_cycle!(state, pop_index, X, y, config)
+                state.stats = config.policy.update_stats(state.populations, state, config)
                 has_budget(state, config) || break
             end
             has_budget(state, config) || break
@@ -126,9 +128,7 @@ function fit_minimal_sr2(X, y, variable_names; config::MinimalSRConfig)
     return format_result(state.archive, state, config)
 end
 
-function regularized_cycle!(
-    state::EngineState, pop_index::Int, X, y, temperature::Float64, config::MinimalSRConfig
-)
+function regularized_cycle!(state::EngineState, pop_index::Int, X, y, config::MinimalSRConfig)
     h = config.h
     p = config.policy
     population = state.populations[pop_index]
@@ -149,7 +149,7 @@ function regularized_cycle!(
         child = make_individual(child_tree, X, y, state, config)
         child === nothing && continue
 
-        if p.acceptance(parent, child, temperature, state, config)
+        if p.acceptance(parent, child, state, config)
             state.populations[pop_index] = p.survival(population, [child], state, config)
             population = state.populations[pop_index]
         end
@@ -186,7 +186,7 @@ function basic_crossover(parent_a, parent_b, state, config)
     # Swap random subtrees.
 end
 
-function basic_acceptance(parent, child, temperature, state, config)
+function basic_acceptance(parent, child, state, config)
     # Always accept valid children; survival decides whether they remain.
     return true
 end
@@ -260,8 +260,8 @@ function pysr_crossover(parent_a, parent_b, state, config)
     # PySR-compatible subtree crossover, including validity retries if needed.
 end
 
-function pysr_acceptance(parent, child, temperature, state, config)
-    # Annealing factor from cost delta and alpha.
+function pysr_acceptance(parent, child, state, config)
+    # Annealing factor from cost delta, alpha, and temperature stored in stats.
     # Frequency factor old_frequency / new_frequency when use_frequency is set.
 end
 
@@ -278,6 +278,7 @@ end
 function pysr_update_stats(populations, state, config)
     # Update running complexity frequencies, normalize them, move the approximate
     # window, and track counters needed by PySR-compatible selection/acceptance.
+    # This is also where PySR-specific temperature/annealing state is advanced.
     # Stats may be global, per-population, or both, depending on what parity needs.
 end
 
@@ -332,7 +333,9 @@ end
 #    move `update_stats` before `update_population` in the generic loop.
 #
 # 4. Acceptance remains parent-child, before survival. Survival receives only
-#    accepted children and decides which population members remain.
+#    accepted children and decides which population members remain. Temperature
+#    is not a generic engine concept; PySR acceptance reads it from `state.stats`,
+#    and PySR `update_stats` decides how and when to advance it.
 #
 # Still open:
 #
