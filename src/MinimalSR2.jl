@@ -30,7 +30,7 @@ mutable struct SearchStats
 end
 
 mutable struct EngineState
-    population::Population
+    populations::Vector{Population}
     archive::Archive
     stats::SearchStats
     rng
@@ -40,6 +40,7 @@ end
 
 Base.@kwdef struct Hyperparameters
     population_size::Int = 100
+    populations::Int = 1
     niterations::Int = 100
     ncycles_per_iteration::Int = 10
     maxsize::Int = 30
@@ -49,8 +50,13 @@ Base.@kwdef struct Hyperparameters
     tournament_selection_n::Int = 2
     tournament_selection_p::Float64 = 1.0
     archive_fraction_replaced::Float64 = 0.0
+    migration_fraction_replaced::Float64 = 0.0
     annealing::Bool = false
     alpha::Float64 = 1.0
+    should_simplify::Bool = true
+    should_optimize_constants::Bool = true
+    optimizer_iterations::Int = 8
+    optimize_probability::Float64 = 0.0
     use_frequency::Bool = false
     use_frequency_in_tournament::Bool = false
     adaptive_parsimony_scaling::Float64 = 0.0
@@ -83,9 +89,9 @@ end
 # mutation(parent, state, config) -> tree | nothing
 # acceptance(parent, child, temperature, state, config) -> Bool
 # crossover(parent_a, parent_b, state, config) -> tree | nothing
-# update_archive(archive, population, state, config) -> Archive
-# update_population(archive, population, state, config) -> Population
-# update_stats(population, state, config) -> SearchStats
+# update_archive(archive, populations, state, config) -> Archive
+# update_population(archive, populations, state, config) -> Vector{Population}
+# update_stats(populations, state, config) -> SearchStats
 
 # These contracts are intentionally state-rich. The callbacks can ignore state
 # for Basic behavior, or use stats/temperature/frequencies/archive for PySR.
@@ -94,39 +100,46 @@ end
 
 function fit_minimal_sr2(X, y, variable_names; config::MinimalSRConfig)
     state = initialize_state(X, y, variable_names, config)
-    initialize_population!(state, X, y, config)
-    state.archive = config.policy.update_archive(state.archive, state.population, state, config)
+    initialize_populations!(state, X, y, config)
+    state.archive = config.policy.update_archive(state.archive, state.populations, state, config)
 
     for iteration in 1:config.h.niterations
         has_budget(state, config) || break
         temperature_schedule = temperatures_for_iteration(iteration, config)
 
-        for temperature in temperature_schedule
-            regularized_cycle!(state, X, y, temperature, config)
+        for pop_index in eachindex(state.populations)
+            for temperature in temperature_schedule
+                regularized_cycle!(state, pop_index, X, y, temperature, config)
+                has_budget(state, config) || break
+            end
             has_budget(state, config) || break
         end
 
-        state.archive = config.policy.update_archive(state.archive, state.population, state, config)
-        state.population = config.policy.update_population(
-            state.archive, state.population, state, config
+        optimize_and_simplify_populations!(state.populations, X, y, state, config)
+        state.archive = config.policy.update_archive(state.archive, state.populations, state, config)
+        state.populations = config.policy.update_population(
+            state.archive, state.populations, state, config
         )
-        state.stats = config.policy.update_stats(state.population, state, config)
+        state.stats = config.policy.update_stats(state.populations, state, config)
     end
 
     return format_result(state.archive, state, config)
 end
 
-function regularized_cycle!(state::EngineState, X, y, temperature::Float64, config::MinimalSRConfig)
+function regularized_cycle!(
+    state::EngineState, pop_index::Int, X, y, temperature::Float64, config::MinimalSRConfig
+)
     h = config.h
     p = config.policy
-    ncycles = cycles_for_population(state.population, h)
+    population = state.populations[pop_index]
+    ncycles = cycles_for_population(population, h)
 
     for _ in 1:ncycles
         has_budget(state, config) || break
 
-        parent = p.selection(state.population, state, config)
+        parent = p.selection(population, state, config)
         child_tree = if should_crossover(state.rng, h)
-            other_parent = p.selection(state.population, state, config)
+            other_parent = p.selection(population, state, config)
             p.crossover(parent, other_parent, state, config)
         else
             p.mutation(parent, state, config)
@@ -137,11 +150,18 @@ function regularized_cycle!(state::EngineState, X, y, temperature::Float64, conf
         child === nothing && continue
 
         if p.acceptance(parent, child, temperature, state, config)
-            state.population = p.survival(state.population, [child], state, config)
+            state.populations[pop_index] = p.survival(population, [child], state, config)
+            population = state.populations[pop_index]
         end
     end
 
     return state
+end
+
+function optimize_and_simplify_populations!(populations, X, y, state, config)
+    # Common loop step for both Basic and PySR variants. Hyperparameters decide
+    # whether this does nothing, simplification only, constant optimization only,
+    # or both. This is intentionally not a policy callback.
 end
 
 # ─── Basic config sketch ────────────────────────────────────────────────────
@@ -171,16 +191,16 @@ function basic_acceptance(parent, child, temperature, state, config)
     return true
 end
 
-function basic_update_archive(archive, population, state, config)
+function basic_update_archive(archive, populations, state, config)
     # All-time top-k by loss/cost.
 end
 
-function basic_update_population(archive, population, state, config)
+function basic_update_population(archive, populations, state, config)
     # No archive migration or population rewrite.
-    return population
+    return populations
 end
 
-function basic_update_stats(population, state, config)
+function basic_update_stats(populations, state, config)
     # No running statistics.
     return state.stats
 end
@@ -191,6 +211,9 @@ function basic_config(; kwargs...)
         tournament_selection_p=1.0,
         crossover_probability=0.0,
         archive_fraction_replaced=0.0,
+        migration_fraction_replaced=0.0,
+        should_simplify=true,
+        should_optimize_constants=true,
         use_frequency=false,
         use_frequency_in_tournament=false,
         kwargs...,
@@ -242,19 +265,20 @@ function pysr_acceptance(parent, child, temperature, state, config)
     # Frequency factor old_frequency / new_frequency when use_frequency is set.
 end
 
-function pysr_update_archive(archive, population, state, config)
+function pysr_update_archive(archive, populations, state, config)
     # Maintain best-by-complexity, then expose Pareto frontier by complexity/loss.
 end
 
-function pysr_update_population(archive, population, state, config)
-    # Migrate/replace a configured fraction of the population from archive.
-    # If we need subpopulation-to-subpopulation migration, this callback likely
-    # needs either all populations or a richer PopulationManager state.
+function pysr_update_population(archive, populations, state, config)
+    # Applies both PySR-style subpopulation migration and archive/HOF migration.
+    # Because this callback sees all populations, the generic engine does not need
+    # separate migration branches.
 end
 
-function pysr_update_stats(population, state, config)
+function pysr_update_stats(populations, state, config)
     # Update running complexity frequencies, normalize them, move the approximate
     # window, and track counters needed by PySR-compatible selection/acceptance.
+    # Stats may be global, per-population, or both, depending on what parity needs.
 end
 
 function pysr_config(; kwargs...)
@@ -263,8 +287,12 @@ function pysr_config(; kwargs...)
         tournament_selection_p=0.982,
         crossover_probability=0.2,
         archive_fraction_replaced=0.0614,
+        migration_fraction_replaced=0.00036,
         annealing=false,
         alpha=3.17,
+        should_simplify=true,
+        should_optimize_constants=true,
+        optimize_probability=0.14,
         use_frequency=true,
         use_frequency_in_tournament=true,
         adaptive_parsimony_scaling=1040.0,
@@ -286,22 +314,30 @@ end
 
 # ─── Open design questions ──────────────────────────────────────────────────
 
-# 1. Should update_population see only one population, or all populations?
-#    PySR has both archive/HOF migration and inter-subpopulation migration.
+# Resolved design choices:
 #
-# 2. Should update_archive return a full archive object plus a public frontier,
-#    or should Archive itself store both best-by-complexity and displayed rows?
+# 1. The engine is multi-population by default. `update_population` and
+#    `update_stats` receive the full `Vector{Population}` so PySR can express
+#    subpopulation migration and archive/HOF migration without special engine
+#    branches. Basic config sets `populations=1` or makes these callbacks no-op.
 #
-# 3. Should update_stats run before or after update_population? PySR currently
-#    counts the evolved population before archive migration in the MiniSR sketch.
+# 2. Simplification and constant optimization are common loop stages controlled
+#    by hyperparameters, not policy callbacks. Both Basic and PySR pass through
+#    the same `optimize_and_simplify_populations!` hook.
 #
-# 4. Should constant optimization and simplification be separate callbacks, or
-#    should they live inside mutation/update_population/update_stats? They are
-#    not in the requested nine functions, but PySR compatibility needs a place
-#    for them.
+# 3. `update_archive` runs after the local evolution plus common optimize/
+#    simplify step. `update_population` runs after archive update, then
+#    `update_stats` observes the post-migration populations. If exact MiniSR
+#    parity requires pre-migration stats, the least invasive adjustment is to
+#    move `update_stats` before `update_population` in the generic loop.
 #
-# 5. Should acceptance happen before survival, as sketched, or should survival
-#    own acceptance by receiving all candidate children? PySR acceptance is a
-#    parent-child decision, while top-k survival can be population-wide.
+# 4. Acceptance remains parent-child, before survival. Survival receives only
+#    accepted children and decides which population members remain.
+#
+# Still open:
+#
+# - Archive representation. Basic only needs top-k all-time; PySR likely wants
+#   best-by-complexity plus a rendered Pareto frontier. `Archive` should probably
+#   become a structured object instead of just `members::Vector{Individual}`.
 
 end # module MinimalSR2
