@@ -9,27 +9,44 @@ const Population = Vector{Individual}
 
 # ─── State/config ───────────────────────────────────────────────────────────
 
-mutable struct Archive
+abstract type AbstractArchiveState end
+abstract type AbstractSearchStatsState end
+
+mutable struct BasicArchiveState <: AbstractArchiveState
     members::Vector{Individual}
+end
+
+BasicArchiveState() = BasicArchiveState(Individual[])
+
+struct BasicStatsState <: AbstractSearchStatsState end
+
+mutable struct PySRArchiveState <: AbstractArchiveState
     best_by_complexity::Dict{Int, Individual}
     frontier::Vector{Individual}
 end
 
-Archive() = Archive(Individual[], Dict{Int, Individual}(), Individual[])
+PySRArchiveState() = PySRArchiveState(Dict{Int, Individual}(), Individual[])
 
-mutable struct SearchStats
+mutable struct PySRStatsState <: AbstractSearchStatsState
     per_population::Vector{MS.RunningSearchStatistics}
     current_temperature::Float64
-    data::Dict{Symbol, Any}
 end
 
-SearchStats() = SearchStats(MS.RunningSearchStatistics[], 1.0, Dict{Symbol, Any}())
+function PySRStatsState(cfg::MS.EngineConfig)
+    return PySRStatsState(
+        [MS.RunningSearchStatistics(cfg.maxsize) for _ in 1:max(1, cfg.populations)],
+        1.0,
+    )
+end
 
-mutable struct EngineState
+mutable struct EngineState{
+    A<:AbstractArchiveState,
+    S<:AbstractSearchStatsState,
+}
     engine::MS.RegularizedEvolutionEngine
     populations::Vector{Population}
-    archive::Archive
-    stats::SearchStats
+    archive::A
+    stats::S
     current_iteration::Int
     current_population::Int
     current_inner_cycle::Int
@@ -37,6 +54,8 @@ mutable struct EngineState
 end
 
 Base.@kwdef struct MinimalSRPolicy
+    init_archive::Function
+    init_stats::Function
     loss_function::Function
     survival::Function
     selection::Function
@@ -54,7 +73,11 @@ Base.@kwdef struct MinimalSRConfig
 end
 
 engine(state::EngineState) = state.engine
-current_stats(state::EngineState) = state.stats.per_population[state.current_population]
+current_stats(state::EngineState{<:AbstractArchiveState, PySRStatsState}) =
+    state.stats.per_population[state.current_population]
+
+archive_members(archive::BasicArchiveState) = archive.members
+archive_members(archive::PySRArchiveState) = archive.frontier
 
 function engine_config_from_kwargs(; kwargs...)
     return MS.EngineConfig(; kwargs...)
@@ -73,11 +96,13 @@ end
 function initialize_state(X, y, variable_names, config::MinimalSRConfig)
     _ = variable_names
     eng = MS.RegularizedEvolutionEngine(Matrix{Float64}(X), Float64.(vec(y)), config.engine_config)
+    archive = config.policy.init_archive(config)
+    stats = config.policy.init_stats(config)
     return EngineState(
         eng,
         Population[],
-        Archive(),
-        SearchStats(),
+        archive,
+        stats,
         0,
         1,
         1,
@@ -88,9 +113,6 @@ end
 function initialize_populations!(state::EngineState, _X, _y, _config::MinimalSRConfig)
     n = max(1, state.engine.cfg.populations)
     state.populations = [MS.initialize_population(state.engine) for _ in 1:n]
-    state.stats.per_population = [
-        MS.RunningSearchStatistics(state.engine.cfg.maxsize) for _ in 1:n
-    ]
     return nothing
 end
 
@@ -223,9 +245,11 @@ function optimize_and_simplify_population!(
     return MS.optimize_and_simplify!(state.engine, population)
 end
 
-function format_result(archive::Archive, state::EngineState, variable_names::Vector{String})
+function format_result(
+    archive::AbstractArchiveState, state::EngineState, variable_names::Vector{String}
+)
     rows = Vector{Dict{String, Any}}()
-    members = isempty(archive.frontier) ? archive.members : archive.frontier
+    members = archive_members(archive)
     if isempty(members)
         best = state.populations[1][1]
         for pop in state.populations, member in pop
@@ -278,7 +302,10 @@ function basic_mutation(parent::Individual, state::EngineState, _config::Minimal
     return MS.default_replace_subtree_mutation(state.engine, parent)
 end
 
-function basic_update_archive!(archive::Archive, populations::Vector{Population},
+init_basic_archive(_config::MinimalSRConfig) = BasicArchiveState()
+init_basic_stats(_config::MinimalSRConfig) = BasicStatsState()
+
+function basic_update_archive!(archive::BasicArchiveState, populations::Vector{Population},
                                _state::EngineState, config::MinimalSRConfig)
     combined = copy(archive.members)
     for pop in populations
@@ -295,11 +322,10 @@ function basic_update_archive!(archive::Archive, populations::Vector{Population}
         push!(archive.members, copy(member))
         length(archive.members) >= max(1, config.engine_config.topn) && break
     end
-    archive.frontier = copy.(archive.members)
     return nothing
 end
 
-basic_update_population(_archive::Archive, populations::Vector{Population},
+basic_update_population(_archive::BasicArchiveState, populations::Vector{Population},
                         _state::EngineState, _config::MinimalSRConfig) = populations
 
 basic_update_stats!(_populations::Vector{Population}, _state::EngineState,
@@ -307,6 +333,8 @@ basic_update_stats!(_populations::Vector{Population}, _state::EngineState,
 
 function basic_policy()
     return MinimalSRPolicy(;
+        init_archive=init_basic_archive,
+        init_stats=init_basic_stats,
         loss_function=mse_loss_function,
         survival=basic_survival,
         selection=basic_selection,
@@ -360,7 +388,10 @@ function pysr_acceptance(parent::Individual, child::Individual, state::EngineSta
     )
 end
 
-function pysr_update_archive!(archive::Archive, populations::Vector{Population},
+init_pysr_archive(_config::MinimalSRConfig) = PySRArchiveState()
+init_pysr_stats(config::MinimalSRConfig) = PySRStatsState(config.engine_config)
+
+function pysr_update_archive!(archive::PySRArchiveState, populations::Vector{Population},
                               _state::EngineState, config::MinimalSRConfig)
     for pop in populations, member in pop
         c = member.complexity
@@ -371,11 +402,10 @@ function pysr_update_archive!(archive::Archive, populations::Vector{Population},
         end
     end
     archive.frontier = MS.calculate_pareto_frontier_from_dict(archive.best_by_complexity)
-    archive.members = copy.(archive.frontier)
     return nothing
 end
 
-function pysr_update_population(archive::Archive, populations::Vector{Population},
+function pysr_update_population(archive::PySRArchiveState, populations::Vector{Population},
                                 state::EngineState, _config::MinimalSRConfig)
     MS.default_migration(state.engine, populations, state.current_population, archive.frontier)
     return populations
@@ -406,6 +436,8 @@ end
 
 function pysr_policy()
     return MinimalSRPolicy(;
+        init_archive=init_pysr_archive,
+        init_stats=init_pysr_stats,
         loss_function=mse_loss_function,
         survival=pysr_survival,
         selection=pysr_selection,
