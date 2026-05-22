@@ -30,12 +30,14 @@ PySRArchiveState() = PySRArchiveState(Dict{Int, Individual}(), Individual[])
 mutable struct PySRStatsState <: AbstractSearchStatsState
     per_population::Vector{MS.RunningSearchStatistics}
     current_temperature::Float64
+    counted_population_cycles::Vector{Int}
 end
 
 function PySRStatsState(cfg::MS.EngineConfig)
     return PySRStatsState(
         [MS.RunningSearchStatistics(cfg.maxsize) for _ in 1:max(1, cfg.populations)],
         1.0,
+        zeros(Int, max(1, cfg.populations)),
     )
 end
 
@@ -50,7 +52,7 @@ mutable struct EngineState{
     current_iteration::Int
     current_population::Int
     current_inner_cycle::Int
-    stats_stage::Symbol
+    completed_population_cycles::Vector{Int}
 end
 
 Base.@kwdef struct MinimalSRPolicy
@@ -106,13 +108,14 @@ function initialize_state(X, y, variable_names, config::MinimalSRConfig)
         0,
         1,
         1,
-        :init,
+        Int[],
     )
 end
 
 function initialize_populations!(state::EngineState, _X, _y, _config::MinimalSRConfig)
     n = max(1, state.engine.cfg.populations)
     state.populations = [MS.initialize_population(state.engine) for _ in 1:n]
+    state.completed_population_cycles = zeros(Int, n)
     return nothing
 end
 
@@ -170,7 +173,6 @@ function fit_minimal_sr2(X_in, y_in, variable_names_in; config::MinimalSRConfig)
             for inner in 1:max(1, config.engine_config.ncycles_per_iteration)
                 has_budget(state, config) || break
                 state.current_inner_cycle = inner
-                state.stats_stage = :before_cycle
                 config.policy.update_stats!(state.populations, state, config)
                 regularized_cycle!(state, pop_index, X, y, config)
             end
@@ -178,8 +180,8 @@ function fit_minimal_sr2(X_in, y_in, variable_names_in; config::MinimalSRConfig)
             has_budget(state, config) && optimize_and_simplify_population!(
                 state.populations[pop_index], state, config
             )
+            state.completed_population_cycles[pop_index] += 1
             config.policy.update_archive!(state.archive, state.populations, state, config)
-            state.stats_stage = :after_population
             config.policy.update_stats!(state.populations, state, config)
             state.populations = config.policy.update_population(
                 state.archive, state.populations, state, config
@@ -415,21 +417,25 @@ function pysr_update_stats!(populations::Vector{Population}, state::EngineState,
                             config::MinimalSRConfig)
     cfg = config.engine_config
     stats = current_stats(state)
-    if state.stats_stage === :before_cycle
-        MS.normalize!(stats)
-        if cfg.annealing && cfg.ncycles_per_iteration > 1
-            denom = max(1, cfg.ncycles_per_iteration - 1)
-            state.stats.current_temperature = 1.0 - (state.current_inner_cycle - 1) / denom
-        else
-            state.stats.current_temperature = 1.0
-        end
-        state.engine.current_temperature = clamp(state.stats.current_temperature, 0.0, 1.0)
-    elseif state.stats_stage === :after_population
+
+    MS.normalize!(stats)
+    if cfg.annealing && cfg.ncycles_per_iteration > 1
+        denom = max(1, cfg.ncycles_per_iteration - 1)
+        state.stats.current_temperature = 1.0 - (state.current_inner_cycle - 1) / denom
+    else
+        state.stats.current_temperature = 1.0
+    end
+    state.engine.current_temperature = clamp(state.stats.current_temperature, 0.0, 1.0)
+
+    pop_idx = state.current_population
+    completed = state.completed_population_cycles[pop_idx]
+    if completed > state.stats.counted_population_cycles[pop_idx]
         pop = populations[state.current_population]
         for member in pop
             MS.update_size!(stats, member.complexity)
         end
         MS.move_window!(stats)
+        state.stats.counted_population_cycles[pop_idx] = completed
     end
     return nothing
 end
