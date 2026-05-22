@@ -30,8 +30,6 @@
     @test !isempty(default_result["rows"])
     @test length(default_result["rows"]) <= 5
 
-    weights = SymbolicRegression.MinimalSR.pysr_compat_mutation_weights()
-    weight_names = SymbolicRegression.MinimalSR.PYSR_COMPAT_MUTATION_WEIGHT_NAMES
     constraints = Dict{String, Any}(
         "/" => [-1, 6],
         "sin" => 6,
@@ -45,8 +43,6 @@
         binary_operators=["+", "-", "*", "/"],
         unary_operators=["sin", "cos"],
         constants=Float64[],
-        mutation_weights=weights,
-        mutation_weight_names=weight_names,
         constraints=constraints,
         nested_constraints=nested_constraints,
         population_size=9,
@@ -83,8 +79,15 @@
         log_file="",
     )
 
+    minisr_kwargs = merge(
+        compat_kwargs,
+        (
+            mutation_weights=copy(SymbolicRegression.MinimalSR.PYSR_COMPAT_MUTATION_WEIGHTS),
+            mutation_weight_names=SymbolicRegression.MinimalSR.PYSR_COMPAT_MUTATION_NAMES,
+        ),
+    )
     minisr_result = SymbolicRegression.MiniSR.fit_mini_sr(
-        Xj, yj, variable_names; compat_kwargs...
+        Xj, yj, variable_names; minisr_kwargs...
     )
     minimal_result = SymbolicRegression.MinimalSR.fit_pysr_compat_sr(
         Xj, yj, variable_names; compat_kwargs...

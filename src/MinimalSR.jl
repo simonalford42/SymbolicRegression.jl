@@ -114,6 +114,8 @@ end
 
 # ─── Config ─────────────────────────────────────────────────────────────────
 
+no_mutation_function(_engine, _parent) = nothing
+
 Base.@kwdef mutable struct EngineConfig
     population_size::Int = 100
     populations::Int = 1
@@ -148,8 +150,7 @@ Base.@kwdef mutable struct EngineConfig
     binary_operators::Vector{Symbol} = [:+, :-, :*, :/]
     unary_operators::Vector{Symbol} = Symbol[]
     constants::Vector{Float64} = Float64[]
-    mutation_weights::Dict{Symbol, Float64} = Dict{Symbol, Float64}()
-    mutation_weight_names::Vector{Symbol} = Symbol[]
+    mutation_function::Function = no_mutation_function
     constraints::Dict{Symbol, Any} = Dict{Symbol, Any}()
     nested_constraints::Dict{Symbol, Any} = Dict{Symbol, Any}()
     random_state::Int = 0
@@ -308,7 +309,6 @@ mutable struct RegularizedEvolutionEngine
     eval_budget::Union{Int, Nothing}
     loss_normalization::Float64
     current_temperature::Float64
-    forced_mutation_name::Union{Symbol, Nothing}
 end
 
 function RegularizedEvolutionEngine(X::Matrix{Float64}, y::Vector{Float64}, cfg::EngineConfig)
@@ -323,7 +323,7 @@ function RegularizedEvolutionEngine(X::Matrix{Float64}, y::Vector{Float64}, cfg:
         0, 0, 0,
         isnothing(cfg.max_evals) ? nothing : max(0, cfg.max_evals),
         baseline_loss >= 0.01 ? baseline_loss : 0.01,
-        1.0, nothing,
+        1.0,
     )
 end
 
@@ -544,53 +544,13 @@ function oldest_survival(population::Vector{Individual}, rng, exclude_indices::S
     return candidates[argmin(births)]
 end
 
-# ─── Mutation weights ───────────────────────────────────────────────────────
-
-function conditioned_mutation_weights(engine::RegularizedEvolutionEngine, tree::Node)
-    nodes = nodes_with_parent(tree)
-    leaves = leaf_nodes(tree)
-    n_constants = count(n -> n isa ConstNode, leaves)
-    names = copy(engine.cfg.mutation_weight_names)
-    w = Dict(name => max(0.0, engine.cfg.mutation_weights[name]) for name in names)
-    if isleaf(tree)
-        w[:mutate_operator] = 0.0
-        w[:swap_operands] = 0.0
-        w[:delete_node] = 0.0
-        w[:simplify] = 0.0
-        if tree isa VarNode
-            w[:optimize] = 0.0
-            w[:mutate_constant] = 0.0
-        else  # ConstNode
-            w[:mutate_feature] = 0.0
-        end
-    end
-    if !any(n isa OpNode && !isnothing(n.right) for (n, _, _) in nodes)
-        w[:swap_operands] = 0.0
-    end
-    w[:mutate_constant] *= min(8, n_constants) / 8.0
-    engine.n_features <= 1 && (w[:mutate_feature] = 0.0)
-    tree_size(tree) >= engine.cfg.maxsize && ((w[:add_node] = 0.0); (w[:insert_node] = 0.0))
-    !engine.cfg.should_simplify && (w[:simplify] = 0.0)
-    return names, w
-end
-
-function sample_mutation_choice(engine::RegularizedEvolutionEngine, tree::Node)
-    names, w = conditioned_mutation_weights(engine, tree)
-    weights = [w[n] for n in names]
-    total = sum(weights)
-    total <= 0 && return :do_nothing
-    weights ./= total
-    return weighted_choice(engine.rng, names, weights)
-end
-
 # ─── Mutation operators ─────────────────────────────────────────────────────
 
-function default_mutation(engine::RegularizedEvolutionEngine, tree::Node)
+function default_mutation(engine::RegularizedEvolutionEngine, tree::Node, mutation::Symbol)
     tree = copy(tree)
     nodes = nodes_with_parent(tree)
     leaves = leaf_nodes(tree)
     constants = [n for n in leaves if n isa ConstNode]
-    mutation = isnothing(engine.forced_mutation_name) ? sample_mutation_choice(engine, tree) : engine.forced_mutation_name
     mutation === :do_nothing && return tree
 
     if mutation === :mutate_constant
@@ -882,7 +842,13 @@ function initialize_population(engine::RegularizedEvolutionEngine)
     return pop
 end
 
-function regularized_cycle!(engine::RegularizedEvolutionEngine, population::Vector{Individual}, stats::RunningSearchStatistics, temperature::Float64)
+function regularized_cycle!(
+    engine::RegularizedEvolutionEngine,
+    population::Vector{Individual},
+    stats::RunningSearchStatistics,
+    temperature::Float64,
+    mutation_function::Function,
+)
     engine.current_temperature = clamp(temperature, 0.0, 1.0)
     n_evol_cycles = Int(ceil(length(population) / max(1, engine.cfg.tournament_selection_n)))
     for _ in 1:n_evol_cycles
@@ -890,20 +856,7 @@ function regularized_cycle!(engine::RegularizedEvolutionEngine, population::Vect
         if rand(engine.rng) > engine.cfg.crossover_probability
             pidx = tournament_select(population, stats, engine.cfg, engine.rng)
             parent = population[pidx]
-            child_tree = nothing
-            fixed_mutation_name = sample_mutation_choice(engine, parent.tree)
-            try
-                engine.forced_mutation_name = fixed_mutation_name
-                for _attempt in 1:10
-                    proposal = default_mutation(engine, parent.tree)
-                    if valid_tree(engine, proposal)
-                        child_tree = proposal
-                        break
-                    end
-                end
-            finally
-                engine.forced_mutation_name = nothing
-            end
+            child_tree = mutation_function(engine, parent)
             if child_tree === nothing
                 engine.cfg.skip_mutation_failures && continue
                 replacement = spawn_from_existing(engine, parent)
@@ -1046,9 +999,8 @@ function fit_minimal_sr(X_in, y_in, variable_names_in;
     binary_operators=String["+", "-", "*", "/"],
     unary_operators=String[],
     constants=Float64[],
+    mutation_function=no_mutation_function,
     policy,
-    mutation_weights,
-    mutation_weight_names,
     constraints=Dict{String, Any}(),
     nested_constraints=Dict{String, Any}(),
     kwargs...,
@@ -1065,8 +1017,7 @@ function fit_minimal_sr(X_in, y_in, variable_names_in;
         binary_operators=as_symbols(binary_operators),
         unary_operators=as_symbols(unary_operators),
         constants=as_floats(constants),
-        mutation_weights=as_symbol_float_dict(mutation_weights),
-        mutation_weight_names=as_symbols(mutation_weight_names),
+        mutation_function=mutation_function,
         constraints=as_constraints(constraints),
         nested_constraints=as_nested_constraints(nested_constraints),
         normalized_kwargs...,

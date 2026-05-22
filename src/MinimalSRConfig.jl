@@ -42,6 +42,14 @@ function minimal_replace_subtree_mutation(engine::RegularizedEvolutionEngine, tr
     return replace_subtree(tree, parent, side, subtree)
 end
 
+function default_replace_subtree_mutation(engine::RegularizedEvolutionEngine, parent::Individual)
+    for _attempt in 1:10
+        proposal = minimal_replace_subtree_mutation(engine, parent.tree)
+        valid_tree(engine, proposal) && return proposal
+    end
+    return nothing
+end
+
 function simple_tournament_select(population::Vector{Individual}, cfg::EngineConfig, rng)
     n = length(population)
     k = min(max(1, cfg.tournament_selection_n), n)
@@ -84,14 +92,7 @@ function default_minimal_generation!(engine::RegularizedEvolutionEngine, populat
         if length(population) < 2 || rand(engine.rng) > engine.cfg.crossover_probability
             pidx = simple_tournament_select(population, engine.cfg, engine.rng)
             parent = population[pidx]
-            child_tree = nothing
-            for _attempt in 1:10
-                proposal = minimal_replace_subtree_mutation(engine, parent.tree)
-                if valid_tree(engine, proposal)
-                    child_tree = proposal
-                    break
-                end
-            end
+            child_tree = engine.cfg.mutation_function(engine, parent)
             child_tree === nothing && continue
             child = create_individual(engine, child_tree; parent_ref=parent.ref)
             child === nothing && break
@@ -163,8 +164,7 @@ function default_minimal_config(; kwargs...)
         binary_operators=String["+", "-", "*", "/"],
         unary_operators=String[],
         constants=Float64[],
-        mutation_weights=Dict{Symbol, Float64}(),
-        mutation_weight_names=Symbol[],
+        mutation_function=default_replace_subtree_mutation,
         constraints=Dict{String, Any}(),
         nested_constraints=Dict{String, Any}(),
         population_size=100,
@@ -205,7 +205,7 @@ end
 
 # ─── PySR/MiniSR compatibility config ───────────────────────────────────────
 
-const PYSR_COMPAT_MUTATION_WEIGHT_NAMES = [
+const PYSR_COMPAT_MUTATION_NAMES = [
     :add_node,
     :insert_node,
     :delete_node,
@@ -226,27 +226,71 @@ const PYSR_COMPAT_MUTATION_WEIGHT_NAMES = [
     :custom_mutation_6,
 ]
 
-function pysr_compat_mutation_weights()
-    return Dict{Symbol, Float64}(
-        :add_node => 2.47,
-        :insert_node => 0.0112,
-        :delete_node => 0.87,
-        :do_nothing => 0.273,
-        :mutate_constant => 0.0346,
-        :mutate_operator => 0.293,
-        :mutate_feature => 0.1,
-        :swap_operands => 0.198,
-        :rotate_tree => 4.26,
-        :randomize => 0.000502,
-        :simplify => 0.00209,
-        :optimize => 0.0,
-        :custom_mutation_1 => 0.0,
-        :custom_mutation_2 => 0.0,
-        :custom_mutation_3 => 0.0,
-        :custom_mutation_4 => 0.0,
-        :custom_mutation_5 => 0.0,
-        :custom_mutation_6 => 0.0,
-    )
+const PYSR_COMPAT_MUTATION_WEIGHTS = Dict{Symbol, Float64}(
+    :add_node => 2.47,
+    :insert_node => 0.0112,
+    :delete_node => 0.87,
+    :do_nothing => 0.273,
+    :mutate_constant => 0.0346,
+    :mutate_operator => 0.293,
+    :mutate_feature => 0.1,
+    :swap_operands => 0.198,
+    :rotate_tree => 4.26,
+    :randomize => 0.000502,
+    :simplify => 0.00209,
+    :optimize => 0.0,
+    :custom_mutation_1 => 0.0,
+    :custom_mutation_2 => 0.0,
+    :custom_mutation_3 => 0.0,
+    :custom_mutation_4 => 0.0,
+    :custom_mutation_5 => 0.0,
+    :custom_mutation_6 => 0.0,
+)
+
+function conditioned_pysr_mutation_weights(engine::RegularizedEvolutionEngine, tree::Node)
+    nodes = nodes_with_parent(tree)
+    leaves = leaf_nodes(tree)
+    n_constants = count(n -> n isa ConstNode, leaves)
+    names = copy(PYSR_COMPAT_MUTATION_NAMES)
+    w = Dict(name => max(0.0, PYSR_COMPAT_MUTATION_WEIGHTS[name]) for name in names)
+    if isleaf(tree)
+        w[:mutate_operator] = 0.0
+        w[:swap_operands] = 0.0
+        w[:delete_node] = 0.0
+        w[:simplify] = 0.0
+        if tree isa VarNode
+            w[:optimize] = 0.0
+            w[:mutate_constant] = 0.0
+        else
+            w[:mutate_feature] = 0.0
+        end
+    end
+    if !any(n isa OpNode && !isnothing(n.right) for (n, _, _) in nodes)
+        w[:swap_operands] = 0.0
+    end
+    w[:mutate_constant] *= min(8, n_constants) / 8.0
+    engine.n_features <= 1 && (w[:mutate_feature] = 0.0)
+    tree_size(tree) >= engine.cfg.maxsize && ((w[:add_node] = 0.0); (w[:insert_node] = 0.0))
+    !engine.cfg.should_simplify && (w[:simplify] = 0.0)
+    return names, w
+end
+
+function sample_pysr_mutation_choice(engine::RegularizedEvolutionEngine, tree::Node)
+    names, w = conditioned_pysr_mutation_weights(engine, tree)
+    weights = [w[n] for n in names]
+    total = sum(weights)
+    total <= 0 && return :do_nothing
+    weights ./= total
+    return weighted_choice(engine.rng, names, weights)
+end
+
+function pysr_weighted_mutation(engine::RegularizedEvolutionEngine, parent::Individual)
+    mutation = sample_pysr_mutation_choice(engine, parent.tree)
+    for _attempt in 1:10
+        proposal = default_mutation(engine, parent.tree, mutation)
+        valid_tree(engine, proposal) && return proposal
+    end
+    return nothing
 end
 
 function run_engine(engine::RegularizedEvolutionEngine, ::PySRCompatPolicy)
@@ -283,7 +327,7 @@ function run_engine(engine::RegularizedEvolutionEngine, ::PySRCompatPolicy)
             collect(range(1.0, 0.0, length=engine.cfg.ncycles_per_iteration)) :
             fill(1.0, max(1, engine.cfg.ncycles_per_iteration))
         for temp in temps
-            regularized_cycle!(engine, pop, s, temp)
+            regularized_cycle!(engine, pop, s, temp, engine.cfg.mutation_function)
             has_budget(engine) || break
         end
         has_budget(engine) && optimize_and_simplify!(engine, pop)
@@ -314,8 +358,7 @@ function pysr_compat_config(; kwargs...)
         binary_operators=String["+", "-", "*", "/"],
         unary_operators=String["sin", "cos", "exp", "log", "sqrt", "square"],
         constants=Float64[],
-        mutation_weights=pysr_compat_mutation_weights(),
-        mutation_weight_names=PYSR_COMPAT_MUTATION_WEIGHT_NAMES,
+        mutation_function=pysr_weighted_mutation,
         constraints=Dict{String, Any}(),
         nested_constraints=Dict{String, Any}(),
         population_size=27,
