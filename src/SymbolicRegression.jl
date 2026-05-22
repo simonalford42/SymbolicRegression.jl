@@ -1318,6 +1318,5 @@ end
 
 include("MiniSR.jl")
 include("MinimalSR.jl")
-include("MinimalSR2.jl")
 
 end #module SR
