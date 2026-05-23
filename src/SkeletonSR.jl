@@ -809,7 +809,4 @@ function format_result(
     return Dict("rows" => rows, "n_evals" => state.engine.eval_count)
 end
 
-include("BasicSRConfig.jl")
-include("PySRConfig.jl")
-
 end

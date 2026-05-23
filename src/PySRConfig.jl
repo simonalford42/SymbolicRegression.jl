@@ -1,5 +1,42 @@
 # PySR policy configuration for SkeletonSR.jl.
 
+module PySRConfig
+
+using Logging: @warn
+using Random: AbstractRNG, randperm
+
+import ..SkeletonSR: result_members
+using ..SkeletonSR:
+    AbstractPolicyState,
+    ConstNode,
+    EngineConfig,
+    EngineState,
+    Individual,
+    Node,
+    OpNode,
+    Population,
+    RegularizedEvolutionEngine,
+    SkeletonSRConfig,
+    SkeletonSRPolicy,
+    VarNode,
+    append_random_op,
+    engine_config_from_namedtuple,
+    evaluate_candidate,
+    fit_skeleton_sr,
+    insert_random_op,
+    isleaf,
+    leaf_nodes,
+    next_birth!,
+    next_ref!,
+    node_string,
+    nodes_with_parent,
+    prepend_random_op,
+    random_tree_fixed_size,
+    replace_subtree,
+    tree_size,
+    valid_tree,
+    weighted_choice
+
 # ─── Running search statistics ──────────────────────────────────────────────
 
 mutable struct RunningSearchStatistics
@@ -617,3 +654,5 @@ end
 
 fit_pysr_sr(args...; kwargs...) =
     fit_skeleton_sr(args...; config=pysr_config(; kwargs...))
+
+end

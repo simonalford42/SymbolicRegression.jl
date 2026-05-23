@@ -1,5 +1,32 @@
 # BasicSR policy configuration for SkeletonSR.jl.
 
+module BasicSRConfig
+
+using Random: randperm
+
+import ..SkeletonSR: result_members
+using ..SkeletonSR:
+    AbstractPolicyState,
+    EngineConfig,
+    EngineState,
+    Individual,
+    Node,
+    OpNode,
+    Population,
+    RegularizedEvolutionEngine,
+    SkeletonSRConfig,
+    SkeletonSRPolicy,
+    engine_config_from_namedtuple,
+    evaluate_candidate,
+    fit_skeleton_sr,
+    node_string,
+    nodes_with_parent,
+    random_terminal,
+    replace_subtree,
+    sample_operator,
+    sample_operator_arity,
+    valid_tree
+
 # ─── Shared policy helpers ───────────────────────────────────────────────────
 
 function basic_random_subtree(engine::RegularizedEvolutionEngine)
@@ -200,3 +227,5 @@ end
 
 fit_basic_sr(args...; kwargs...) =
     fit_skeleton_sr(args...; config=basic_sr_config(; kwargs...))
+
+end

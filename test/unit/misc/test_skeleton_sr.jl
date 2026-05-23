@@ -8,7 +8,7 @@
     yj = @. 1.5 * Xj[:, 1] - 0.75 * Xj[:, 2] + 0.2
     variable_names = ["x0", "x1"]
 
-    basic_result = SymbolicRegression.SkeletonSR.fit_basic_sr(
+    basic_result = SymbolicRegression.BasicSRConfig.fit_basic_sr(
         Xj,
         yj,
         variable_names;
@@ -82,14 +82,14 @@
     minisr_kwargs = merge(
         pysr_kwargs,
         (
-            mutation_weights=copy(SymbolicRegression.SkeletonSR.PYSR_MUTATION_WEIGHTS),
-            mutation_weight_names=SymbolicRegression.SkeletonSR.PYSR_MUTATION_NAMES,
+            mutation_weights=copy(SymbolicRegression.PySRConfig.PYSR_MUTATION_WEIGHTS),
+            mutation_weight_names=SymbolicRegression.PySRConfig.PYSR_MUTATION_NAMES,
         ),
     )
     minisr_result = SymbolicRegression.MiniSR.fit_mini_sr(
         Xj, yj, variable_names; minisr_kwargs...
     )
-    skeleton_result = SymbolicRegression.SkeletonSR.fit_pysr_sr(
+    skeleton_result = SymbolicRegression.PySRConfig.fit_pysr_sr(
         Xj, yj, variable_names; pysr_kwargs...
     )
 
