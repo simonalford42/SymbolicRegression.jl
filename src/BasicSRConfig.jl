@@ -75,7 +75,7 @@ function basic_loss_function(tree::Node, complexity::Int, state::EngineState, _c
         return (Inf, Inf)
     end
     loss = sum((engine.y .- pred) .^ 2) / length(engine.y)
-    cost = loss / engine.loss_normalization
+    cost = loss
     isfinite(cost) || return (Inf, Inf)
     return (loss, cost + state.policy_state.options.parsimony * complexity)
 end

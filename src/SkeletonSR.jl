@@ -207,14 +207,11 @@ mutable struct EvolutionEngine
     ref_counter::Int
     eval_count::Int
     eval_budget::Union{Int, Nothing}
-    loss_normalization::Float64
     current_temperature::Float64
 end
 
 function EvolutionEngine(X::Matrix{Float64}, y::Vector{Float64}, cfg::EngineConfig)
     rng = Xoshiro(cfg.random_state)
-    baseline_loss = _mean((y .- _mean(y)) .^ 2)
-    !isfinite(baseline_loss) && (baseline_loss = 1.0)
     return EvolutionEngine(
         X, y, cfg, rng,
         size(X, 2),
@@ -222,7 +219,6 @@ function EvolutionEngine(X::Matrix{Float64}, y::Vector{Float64}, cfg::EngineConf
         copy(cfg.unary_operators),
         0, 0, 0,
         isnothing(cfg.max_evals) ? nothing : max(0, cfg.max_evals),
-        baseline_loss >= 0.01 ? baseline_loss : 0.01,
         1.0,
     )
 end

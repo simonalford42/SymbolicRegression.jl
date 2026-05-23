@@ -406,7 +406,10 @@ function pysr_mse_loss_function(tree::Node, complexity::Int, state::EngineState,
         return (Inf, Inf)
     end
     loss = sum((engine.y .- pred) .^ 2) / length(engine.y)
-    cost = loss / engine.loss_normalization
+    baseline_loss = sum((engine.y .- (sum(engine.y) / length(engine.y))) .^ 2) / length(engine.y)
+    !isfinite(baseline_loss) && (baseline_loss = 1.0)
+    loss_normalization = baseline_loss >= 0.01 ? baseline_loss : 0.01
+    cost = loss / loss_normalization
     isfinite(cost) || return (Inf, Inf)
     return (loss, cost + state.policy_state.options.parsimony * complexity)
 end
