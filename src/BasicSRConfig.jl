@@ -120,114 +120,140 @@ function basic_sr_kwargs(; kwargs...)
     return merge(defaults, (; kwargs...))
 end
 
+function basic_loss_function(tree::Node, state::EngineState, _config::SkeletonSRConfig)
+    out = evaluate_candidate(state.engine, tree)
+    out === nothing && return nothing
+    loss, cost, complexity = out
+    return (loss, cost + state.policy_state.options.parsimony * complexity, complexity)
+end
+
+function basic_survival(
+    population::Population,
+    candidates::Vector{Individual},
+    _state::EngineState,
+    config::SkeletonSRConfig,
+)
+    output = copy(population)
+    topk_survive!(output, candidates, config.engine_config)
+    return output
+end
+
+function basic_selection(population::Population, state::EngineState, _config::SkeletonSRConfig)
+    idx = simple_tournament_select(
+        population, state.policy_state.options.tournament_selection_n, state.engine.rng
+    )
+    return population[idx]
+end
+
+function basic_mutation(parent::Individual, state::EngineState, _config::SkeletonSRConfig)
+    return basic_replace_subtree_mutation(state.engine, parent)
+end
+
+function basic_acceptance(
+    _parent::Individual, _child::Individual, _state::EngineState, _config::SkeletonSRConfig
+)
+    return true
+end
+
+function basic_crossover(
+    parent_a::Individual,
+    parent_b::Individual,
+    state::EngineState,
+    _config::SkeletonSRConfig,
+)
+    for _attempt in 1:10
+        t1 = copy(parent_a.tree)
+        t2 = copy(parent_b.tree)
+        node1, p1, s1 = rand(state.engine.rng, nodes_with_parent(t1))
+        node2, p2, s2 = rand(state.engine.rng, nodes_with_parent(t2))
+        t1 = replace_subtree(t1, p1, s1, copy(node2))
+        t2 = replace_subtree(t2, p2, s2, copy(node1))
+        valid_tree(state.engine, t1) && valid_tree(state.engine, t2) && return (t1, t2)
+    end
+    return nothing
+end
+
+function basic_cycles_per_population(
+    population::Population, state::EngineState, _config::SkeletonSRConfig
+)
+    return Int(ceil(length(population) / max(1, state.policy_state.options.tournament_selection_n)))
+end
+
+function basic_should_crossover(population::Population, state::EngineState, _config::SkeletonSRConfig)
+    return length(population) >= 2 &&
+        rand(state.engine.rng) <= state.policy_state.options.crossover_probability
+end
+
+function basic_skip_mutation_failures(state::EngineState, _config::SkeletonSRConfig)
+    return state.policy_state.options.skip_mutation_failures
+end
+
+function basic_postprocess_population!(
+    _population::Population, _state::EngineState, _config::SkeletonSRConfig
+)
+    return nothing
+end
+
+function basic_update_population(
+    _policy_state::BasicSRState,
+    populations::Vector{Population},
+    _state::EngineState,
+    _config::SkeletonSRConfig,
+)
+    return populations
+end
+
+function basic_update_archive!(
+    populations::Vector{Population}, state::EngineState{BasicSRState}, _config::SkeletonSRConfig
+)
+    policy_state = state.policy_state
+    pop_indices = if !policy_state.archive_initialized
+        collect(eachindex(populations))
+    else
+        [
+            i for i in eachindex(populations) if
+            state.completed_population_cycles[i] > policy_state.archive_counted_population_cycles[i]
+        ]
+    end
+    isempty(pop_indices) && return nothing
+
+    combined = copy(policy_state.archive)
+    for i in pop_indices
+        append!(combined, copy.(populations[i]))
+    end
+    sort!(combined, by=m -> (m.loss, m.cost, m.complexity, m.birth))
+    empty!(policy_state.archive)
+    seen = Set{String}()
+    for member in combined
+        isfinite(member.loss) || continue
+        key = node_string(member.tree)
+        key in seen && continue
+        push!(seen, key)
+        push!(policy_state.archive, copy(member))
+        length(policy_state.archive) >= max(1, policy_state.options.topn) && break
+    end
+    for i in pop_indices
+        policy_state.archive_counted_population_cycles[i] = state.completed_population_cycles[i]
+    end
+    policy_state.archive_initialized = true
+    return nothing
+end
+
 function basic_policy(options::BasicSROptions)
     return SkeletonSRPolicy(;
         init_state=config -> BasicSRState(config.engine_config, options),
-        loss_function=(tree::Node, state::EngineState, _config::SkeletonSRConfig) -> begin
-            out = evaluate_candidate(state.engine, tree)
-            out === nothing && return nothing
-            loss, cost, complexity = out
-            return (loss, cost + state.policy_state.options.parsimony * complexity, complexity)
-        end,
-        survival=(
-            population::Population,
-            candidates::Vector{Individual},
-            _state::EngineState,
-            config::SkeletonSRConfig,
-        ) -> begin
-            output = copy(population)
-            topk_survive!(output, candidates, config.engine_config)
-            return output
-        end,
-        selection=(population::Population, state::EngineState, _config::SkeletonSRConfig) -> begin
-            idx = simple_tournament_select(
-                population, state.policy_state.options.tournament_selection_n, state.engine.rng
-            )
-            return population[idx]
-        end,
-        mutation=(parent::Individual, state::EngineState, _config::SkeletonSRConfig) -> begin
-            return basic_replace_subtree_mutation(state.engine, parent)
-        end,
-        acceptance=(
-            _parent::Individual,
-            _child::Individual,
-            _state::EngineState,
-            _config::SkeletonSRConfig,
-        ) -> true,
-        crossover=(
-            parent_a::Individual,
-            parent_b::Individual,
-            state::EngineState,
-            _config::SkeletonSRConfig,
-        ) -> begin
-            for _attempt in 1:10
-                t1 = copy(parent_a.tree)
-                t2 = copy(parent_b.tree)
-                node1, p1, s1 = rand(state.engine.rng, nodes_with_parent(t1))
-                node2, p2, s2 = rand(state.engine.rng, nodes_with_parent(t2))
-                t1 = replace_subtree(t1, p1, s1, copy(node2))
-                t2 = replace_subtree(t2, p2, s2, copy(node1))
-                valid_tree(state.engine, t1) && valid_tree(state.engine, t2) && return (t1, t2)
-            end
-            return nothing
-        end,
-        cycles_per_population=(
-            population::Population, state::EngineState, _config::SkeletonSRConfig
-        ) -> begin
-            return Int(ceil(length(population) / max(1, state.policy_state.options.tournament_selection_n)))
-        end,
-        should_crossover=(
-            population::Population, state::EngineState, _config::SkeletonSRConfig
-        ) -> begin
-            return length(population) >= 2 &&
-                rand(state.engine.rng) <= state.policy_state.options.crossover_probability
-        end,
-        skip_mutation_failures=(state::EngineState, _config::SkeletonSRConfig) -> begin
-            return state.policy_state.options.skip_mutation_failures
-        end,
-        postprocess_population! = (
-            _population::Population, _state::EngineState, _config::SkeletonSRConfig
-        ) -> nothing,
-        update_population=(
-            _policy_state::BasicSRState,
-            populations::Vector{Population},
-            _state::EngineState,
-            _config::SkeletonSRConfig,
-        ) -> populations,
-        update_state! = (populations::Vector{Population}, state::EngineState{BasicSRState},
-                         _config::SkeletonSRConfig) -> begin
-            policy_state = state.policy_state
-            pop_indices = if !policy_state.archive_initialized
-                collect(eachindex(populations))
-            else
-                [
-                    i for i in eachindex(populations) if
-                    state.completed_population_cycles[i] > policy_state.archive_counted_population_cycles[i]
-                ]
-            end
-            isempty(pop_indices) && return nothing
-
-            combined = copy(policy_state.archive)
-            for i in pop_indices
-                append!(combined, copy.(populations[i]))
-            end
-            sort!(combined, by=m -> (m.loss, m.cost, m.complexity, m.birth))
-            empty!(policy_state.archive)
-            seen = Set{String}()
-            for member in combined
-                isfinite(member.loss) || continue
-                key = node_string(member.tree)
-                key in seen && continue
-                push!(seen, key)
-                push!(policy_state.archive, copy(member))
-                length(policy_state.archive) >= max(1, policy_state.options.topn) && break
-            end
-            for i in pop_indices
-                policy_state.archive_counted_population_cycles[i] = state.completed_population_cycles[i]
-            end
-            policy_state.archive_initialized = true
-            return nothing
-        end,
+        loss_function=basic_loss_function,
+        survival=basic_survival,
+        selection=basic_selection,
+        mutation=basic_mutation,
+        acceptance=basic_acceptance,
+        crossover=basic_crossover,
+        cycles_per_population=basic_cycles_per_population,
+        should_crossover=basic_should_crossover,
+        skip_mutation_failures=basic_skip_mutation_failures,
+        postprocess_population! = basic_postprocess_population!,
+        update_population=basic_update_population,
+        update_state! = basic_update_archive!,
     )
 end
 
