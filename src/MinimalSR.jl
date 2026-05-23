@@ -61,57 +61,6 @@ end
 
 Base.copy(m::Individual) = Individual(copy(m.tree), m.loss, m.cost, m.complexity, m.birth, m.ref, m.parent_ref)
 
-# ─── Running search statistics ──────────────────────────────────────────────
-
-mutable struct RunningSearchStatistics
-    frequencies::Vector{Float64}
-    normalized_frequencies::Vector{Float64}
-    window_size::Int
-end
-
-function RunningSearchStatistics(maxsize::Int; window_size::Int=100_000)
-    freqs = ones(Float64, maxsize)
-    RunningSearchStatistics(freqs, freqs ./ sum(freqs), window_size)
-end
-
-function update_size!(stats::RunningSearchStatistics, size::Int)
-    if 1 <= size <= length(stats.frequencies)
-        stats.frequencies[size] += 1.0
-    end
-end
-
-function move_window!(stats::RunningSearchStatistics)
-    smallest_frequency_allowed = 1.0
-    max_loops = 1000
-    total = sum(stats.frequencies)
-    total <= stats.window_size && return
-    difference = total - stats.window_size
-    num_loops = 0
-    while difference > 0
-        indices = findall(>(smallest_frequency_allowed), stats.frequencies)
-        isempty(indices) && break
-        num_remaining = length(indices)
-        max_subtract = minimum(stats.frequencies[indices]) - smallest_frequency_allowed
-        amount = min(difference / num_remaining, max_subtract)
-        stats.frequencies[indices] .-= amount
-        total_subtracted = amount * num_remaining
-        difference -= total_subtracted
-        num_loops += 1
-        if num_loops > max_loops || total_subtracted < 1e-6
-            break
-        end
-    end
-end
-
-function normalize!(stats::RunningSearchStatistics)
-    total = sum(stats.frequencies)
-    if total <= 0
-        stats.normalized_frequencies .= 1.0 / length(stats.frequencies)
-    else
-        stats.normalized_frequencies .= stats.frequencies ./ total
-    end
-end
-
 # ─── Config ─────────────────────────────────────────────────────────────────
 
 Base.@kwdef mutable struct EngineConfig
@@ -193,17 +142,6 @@ end
 
 # ─── Samplers ───────────────────────────────────────────────────────────────
 
-# Knuth's algorithm, matches SymbolicRegression.jl/src/Utils.jl:poisson_sample
-function poisson_sample(rng::AbstractRNG, λ::Float64)
-    iszero(λ) && return 0
-    k, p, L = 0, 1.0, exp(-λ)
-    while p > L
-        k += 1
-        p *= rand(rng)
-    end
-    return k - 1
-end
-
 function weighted_choice(rng, arr, weights)
     r = rand(rng)
     acc = 0.0
@@ -213,8 +151,6 @@ function weighted_choice(rng, arr, weights)
     end
     return arr[end]
 end
-
-sample_indices(rng, n::Int, k::Int) = randperm(rng, n)[1:min(k, n)]
 
 # ─── Operator tables ────────────────────────────────────────────────────────
 
@@ -503,212 +439,6 @@ end
 spawn_from_existing(engine::RegularizedEvolutionEngine, member::Individual; parent_ref::Union{Int, Nothing}=nothing) =
     Individual(copy(member.tree), member.loss, member.cost, member.complexity, next_birth!(engine), next_ref!(engine), isnothing(parent_ref) ? member.ref : parent_ref)
 
-# ─── Selection / survival ───────────────────────────────────────────────────
-
-function tournament_select(population::Vector{Individual}, stats::RunningSearchStatistics, cfg::EngineConfig, rng)
-    n = length(population)
-    k = min(cfg.tournament_selection_n, n)
-    candidate_idx = sample_indices(rng, n, k)
-    adjusted_costs = Float64[]
-    for idx in candidate_idx
-        m = population[idx]
-        cost = m.cost
-        if cfg.use_frequency_in_tournament && 1 <= m.complexity <= cfg.maxsize
-            freq = stats.normalized_frequencies[m.complexity]
-            cost *= exp(clamp(cfg.adaptive_parsimony_scaling * freq, -50.0, 50.0))
-        end
-        push!(adjusted_costs, cost)
-    end
-    order = sortperm(adjusted_costs)
-    p = cfg.tournament_selection_p
-    p >= 1.0 && return candidate_idx[order[1]]
-    weights = [p * ((1 - p) ^ i) for i in 0:(k - 1)]
-    weights ./= sum(weights)
-    place = weighted_choice(rng, 1:k, weights)
-    return candidate_idx[order[place]]
-end
-
-function oldest_survival(population::Vector{Individual}, rng, exclude_indices::Set{Int})
-    candidates = [i for i in eachindex(population) if i ∉ exclude_indices]
-    isempty(candidates) && return rand(rng, eachindex(population))
-    births = [population[i].birth for i in candidates]
-    return candidates[argmin(births)]
-end
-
-# ─── Mutation operators ─────────────────────────────────────────────────────
-
-function default_mutation(engine::RegularizedEvolutionEngine, tree::Node, mutation::Symbol)
-    tree = copy(tree)
-    nodes = nodes_with_parent(tree)
-    leaves = leaf_nodes(tree)
-    constants = [n for n in leaves if n isa ConstNode]
-    mutation === :do_nothing && return tree
-
-    if mutation === :mutate_constant
-        if !isempty(constants)
-            node = rand(engine.rng, constants)
-            temperature = clamp(engine.current_temperature, 0.0, 1.0)
-            bottom = 0.1
-            max_change = engine.cfg.perturbation_factor * temperature + 1.0 + bottom
-            factor = max_change ^ rand(engine.rng)
-            rand(engine.rng) < 0.5 && (factor = 1.0 / factor)
-            rand(engine.rng) > engine.cfg.probability_negate_constant && (factor *= -1.0)
-            node.value = clamp(node.value * factor, -1e6, 1e6)
-        end
-        return tree
-
-    elseif mutation === :mutate_feature
-        vars_only = [n for n in leaves if n isa VarNode]
-        if !isempty(vars_only)
-            node = rand(engine.rng, vars_only)
-            if engine.n_features > 1
-                choices = [i for i in 1:engine.n_features if i != node.feature]
-                node.feature = rand(engine.rng, choices)
-            else
-                node.feature = rand(engine.rng, 1:engine.n_features)
-            end
-        end
-        return tree
-
-    elseif mutation === :mutate_operator
-        op_nodes = [n for (n, _, _) in nodes if n isa OpNode]
-        if !isempty(op_nodes)
-            node = rand(engine.rng, op_nodes)
-            if isnothing(node.right) && !isempty(engine.unary_ops)
-                node.op = rand(engine.rng, engine.unary_ops)
-            elseif !isnothing(node.right) && !isempty(engine.binary_ops)
-                node.op = rand(engine.rng, engine.binary_ops)
-            end
-        end
-        return tree
-
-    elseif mutation === :swap_operands
-        binary_nodes = [n for (n, _, _) in nodes if n isa OpNode && !isnothing(n.right)]
-        if !isempty(binary_nodes)
-            node = rand(engine.rng, binary_nodes)
-            node.left, node.right = node.right, node.left
-        end
-        return tree
-
-    elseif mutation === :delete_node
-        deletable = [(n, p, s) for (n, p, s) in nodes if n isa OpNode]
-        if !isempty(deletable)
-            node, parent, side = rand(engine.rng, deletable)
-            repl = if isnothing(node.right)
-                copy(node.left)
-            else
-                rand(engine.rng) < 0.5 ? copy(node.left) : copy(node.right)
-            end
-            tree = replace_subtree(tree, parent, side, repl)
-        end
-        return tree
-
-    elseif mutation === :rotate_tree
-        valid = Tuple{OpNode, Union{OpNode, Nothing}, Union{Symbol, Nothing}, Vector{Symbol}}[]
-        for (node, parent, side) in nodes
-            node isa OpNode || continue
-            pivot_sides = Symbol[]
-            node.left isa OpNode && push!(pivot_sides, :left)
-            !isnothing(node.right) && node.right isa OpNode && push!(pivot_sides, :right)
-            !isempty(pivot_sides) && push!(valid, (node, parent, side, pivot_sides))
-        end
-        if !isempty(valid)
-            node, parent, side, pivot_sides = rand(engine.rng, valid)
-            pivot_side = rand(engine.rng, pivot_sides)
-            pivot = pivot_side === :left ? node.left : node.right
-            pivot isa OpNode || return tree  # defensive, shouldn't hit
-            grand_sides = Symbol[]
-            push!(grand_sides, :left)  # OpNode always has left
-            !isnothing(pivot.right) && push!(grand_sides, :right)
-            grand_side = rand(engine.rng, grand_sides)
-            grand_child = grand_side === :left ? pivot.left : pivot.right
-            pivot_side === :left ? (node.left = grand_child) : (node.right = grand_child)
-            grand_side === :left ? (pivot.left = node) : (pivot.right = node)
-            tree = replace_subtree(tree, parent, side, pivot)
-        end
-        return tree
-
-    elseif mutation === :add_node
-        return rand(engine.rng) < 0.5 ? append_random_op(engine, tree) : prepend_random_op(engine, tree)
-
-    elseif mutation === :insert_node
-        return insert_random_op(engine, tree)
-
-    elseif mutation === :simplify || mutation === :optimize
-        return tree
-
-    elseif mutation === :randomize
-        target_size = rand(engine.rng, 1:engine.cfg.maxsize)
-        return random_tree_fixed_size(engine, target_size)
-    end
-    return tree
-end
-
-function default_crossover(engine::RegularizedEvolutionEngine, parent1::Node, parent2::Node)
-    t1 = copy(parent1)
-    t2 = copy(parent2)
-    n1 = nodes_with_parent(t1)
-    n2 = nodes_with_parent(t2)
-    node1, p1, s1 = rand(engine.rng, n1)
-    node2, p2, s2 = rand(engine.rng, n2)
-    t1 = replace_subtree(t1, p1, s1, copy(node2))
-    t2 = replace_subtree(t2, p2, s2, copy(node1))
-    return t1, t2
-end
-
-# ─── Migration ──────────────────────────────────────────────────────────────
-
-function default_migration(engine::RegularizedEvolutionEngine, populations::Vector{Vector{Individual}}, pop_idx::Int, dominating::Vector{Individual})
-    cfg = engine.cfg
-    target = populations[pop_idx]
-    isempty(target) && return
-    function replace_from!(candidates::Vector{Individual}, frac::Float64)
-        (isempty(candidates) || frac <= 0) && return
-        n = poisson_sample(engine.rng, max(0.0, length(target) * frac))
-        n <= 0 && return
-        n = min(n, length(target))
-        for _ in 1:n
-            dst = rand(engine.rng, 1:length(target))
-            src = copy(rand(engine.rng, candidates))
-            src.birth = next_birth!(engine)
-            src.ref = next_ref!(engine)
-            target[dst] = src
-        end
-    end
-    if cfg.migration
-        best_of_each = Individual[]
-        for pop in populations
-            isempty(pop) && continue
-            topk = sort(pop, by=m -> m.cost)[1:max(1, min(cfg.topn, length(pop)))]
-            append!(best_of_each, copy.(topk))
-        end
-        replace_from!(best_of_each, cfg.fraction_replaced)
-    end
-    cfg.hof_migration && replace_from!(dominating, cfg.fraction_replaced_hof)
-end
-
-# ─── Acceptance ─────────────────────────────────────────────────────────────
-
-function accept_candidate(engine::RegularizedEvolutionEngine, parent::Individual, child::Individual, stats::RunningSearchStatistics, temperature::Float64)
-    isfinite(child.cost) || return false
-    prob = 1.0
-    if engine.cfg.annealing
-        delta = child.cost - parent.cost
-        denom = max(1e-8, temperature * engine.cfg.alpha)
-        prob *= exp(clamp(-delta / denom, -50.0, 50.0))
-    end
-    if engine.cfg.use_frequency
-        old_size = min(max(parent.complexity, 1), engine.cfg.maxsize)
-        new_size = min(max(child.complexity, 1), engine.cfg.maxsize)
-        old_f = stats.normalized_frequencies[old_size]
-        new_f = stats.normalized_frequencies[new_size]
-        prob *= old_f / max(new_f, 1e-12)
-    end
-    prob = min(prob, 1e6)
-    prob >= 1.0 && return true
-    return rand(engine.rng) < prob
-end
-
 # ─── Constant optimization ──────────────────────────────────────────────────
 
 function set_constants!(tree::Node, vals::AbstractVector{<:Real})
@@ -839,76 +569,6 @@ function optimize_and_simplify!(engine::RegularizedEvolutionEngine, population::
             member, _ = optimize_constants(engine, member)
         end
         population[i] = member
-    end
-end
-
-function calculate_pareto_frontier_from_dict(hof_by_complexity::Dict{Int, Individual})
-    dominating = Individual[]
-    best_so_far = Inf
-    for c in sort(collect(keys(hof_by_complexity)))
-        member = hof_by_complexity[c]
-        if member.loss < best_so_far
-            push!(dominating, copy(member))
-            best_so_far = member.loss
-        end
-    end
-    return dominating
-end
-
-# ── Baseline logging infra — do not remove or modify in experiments ──
-# Escape a string for JSON output. Handles the subset of characters MiniSR
-# equations actually produce (backslashes, quotes, control chars).
-function _json_escape(s::AbstractString)
-    buf = IOBuffer()
-    for c in s
-        if c == '"'
-            write(buf, "\\\"")
-        elseif c == '\\'
-            write(buf, "\\\\")
-        elseif c == '\n'
-            write(buf, "\\n")
-        elseif c == '\r'
-            write(buf, "\\r")
-        elseif c == '\t'
-            write(buf, "\\t")
-        elseif c < ' '
-            write(buf, string("\\u", lpad(string(UInt16(c), base=16), 4, '0')))
-        else
-            write(buf, c)
-        end
-    end
-    return String(take!(buf))
-end
-
-function _json_float(x::Float64)
-    if isnan(x); return "NaN"; end
-    if isinf(x); return x > 0 ? "Infinity" : "-Infinity"; end
-    return string(x)
-end
-
-function write_hof_log(engine::RegularizedEvolutionEngine, cycle::Int, dominating::Vector{Individual})
-    path = engine.cfg.log_file
-    isempty(path) && return
-    budget = engine.eval_budget
-    progress = (isnothing(budget) || budget == 0) ? 0.0 : engine.eval_count / budget
-    try
-        open(path, "a") do io
-            write(io, "{\"cycle\":", string(cycle))
-            write(io, ",\"eval_count\":", string(engine.eval_count))
-            write(io, ",\"progress\":", _json_float(progress))
-            write(io, ",\"frontier\":[")
-            for (i, m) in enumerate(dominating)
-                i > 1 && write(io, ",")
-                eqn = node_string(m.tree)
-                write(io, "{\"complexity\":", string(m.complexity))
-                write(io, ",\"loss\":", _json_float(m.loss))
-                write(io, ",\"equation\":\"", _json_escape(eqn), "\"}")
-            end
-            write(io, "]}\n")
-        end
-    catch err
-        # Don't let logging errors kill the search.
-        @warn "write_hof_log failed" path=path err=err
     end
 end
 
@@ -1052,7 +712,7 @@ function fit_minimal_sr(X_in, y_in, variable_names_in; config::MinimalSRConfig)
                 has_budget(state, config) || break
                 state.current_inner_cycle = inner
                 config.policy.update_state!(state.populations, state, config)
-                regularized_cycle!(state, pop_index, X, y, config)
+                evolve_cycle!(state, pop_index, X, y, config)
             end
 
             has_budget(state, config) && optimize_and_simplify_population!(
@@ -1069,7 +729,7 @@ function fit_minimal_sr(X_in, y_in, variable_names_in; config::MinimalSRConfig)
     return format_result(state.policy_state, state, variable_names)
 end
 
-function regularized_cycle!(state::EngineState, pop_index::Int, X, y, config::MinimalSRConfig)
+function evolve_cycle!(state::EngineState, pop_index::Int, X, y, config::MinimalSRConfig)
     cfg = config.engine_config
     policy = config.policy
     population = state.populations[pop_index]
