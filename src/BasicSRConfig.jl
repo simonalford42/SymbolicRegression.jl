@@ -13,7 +13,6 @@ using ..SkeletonSR:
     Node,
     OpNode,
     Population,
-    EvolutionEngine,
     SkeletonSRConfig,
     SkeletonSRPolicy,
     engine_config_from_namedtuple,
@@ -27,60 +26,12 @@ using ..SkeletonSR:
     sample_operator_arity,
     valid_tree
 
-# ─── Shared policy helpers ───────────────────────────────────────────────────
-
-function basic_random_subtree(engine::EvolutionEngine)
-    rand(engine.rng) < 0.5 && return random_terminal(engine)
-    arity = sample_operator_arity(engine; max_added_nodes=2)
-    arity <= 0 && return random_terminal(engine)
-    op = sample_operator(engine, arity)
-    arity == 1 && return OpNode(op, random_terminal(engine), nothing)
-    return OpNode(op, random_terminal(engine), random_terminal(engine))
-end
-
-function basic_replace_subtree_mutation_tree(engine::EvolutionEngine, tree::Node)
-    tree = copy(tree)
-    nodes = nodes_with_parent(tree)
-    isempty(nodes) && return tree
-    _, parent, side = rand(engine.rng, nodes)
-    subtree = basic_random_subtree(engine)
-    return replace_subtree(tree, parent, side, subtree)
-end
-
-function basic_replace_subtree_mutation(engine::EvolutionEngine, parent::Individual)
-    for _attempt in 1:10
-        proposal = basic_replace_subtree_mutation_tree(engine, parent.tree)
-        valid_tree(engine, proposal) && return proposal
-    end
-    return nothing
-end
-
-basic_sample_indices(rng, n::Int, k::Int) = randperm(rng, n)[1:min(k, n)]
-
 Base.@kwdef struct BasicSROptions
     tournament_selection_n::Int = 5
     crossover_probability::Float64 = 0.1
     skip_mutation_failures::Bool = true
     topn::Int = 10
     parsimony::Float64 = 0.0
-end
-
-function simple_tournament_select(population::Vector{Individual}, tournament_selection_n::Int, rng)
-    n = length(population)
-    k = min(max(1, tournament_selection_n), n)
-    candidate_idx = basic_sample_indices(rng, n, k)
-    costs = [population[i].cost for i in candidate_idx]
-    return candidate_idx[argmin(costs)]
-end
-
-function topk_survive!(population::Vector{Individual}, offspring::Vector{Individual}, cfg::EngineConfig)
-    isempty(offspring) && return nothing
-    combined = vcat(copy.(population), copy.(offspring))
-    sort!(combined, by=m -> (m.cost, m.loss, m.complexity, m.birth))
-    keep = min(length(population), cfg.population_size, length(combined))
-    empty!(population)
-    append!(population, combined[1:keep])
-    return nothing
 end
 
 # ─── BasicSR policy ──────────────────────────────────────────────────────────
@@ -134,19 +85,51 @@ function basic_survival(
     config::SkeletonSRConfig,
 )
     output = copy(population)
-    topk_survive!(output, candidates, config.engine_config)
+    isempty(candidates) && return output
+    combined = vcat(copy.(population), copy.(candidates))
+    sort!(combined, by=m -> (m.cost, m.loss, m.complexity, m.birth))
+    keep = min(length(population), config.engine_config.population_size, length(combined))
+    empty!(output)
+    append!(output, combined[1:keep])
     return output
 end
 
 function basic_selection(population::Population, state::EngineState, _config::SkeletonSRConfig)
-    idx = simple_tournament_select(
-        population, state.policy_state.options.tournament_selection_n, state.engine.rng
-    )
-    return population[idx]
+    n = length(population)
+    k = min(max(1, state.policy_state.options.tournament_selection_n), n)
+    candidate_idx = randperm(state.engine.rng, n)[1:k]
+    costs = [population[i].cost for i in candidate_idx]
+    return population[candidate_idx[argmin(costs)]]
 end
 
 function basic_mutation(parent::Individual, state::EngineState, _config::SkeletonSRConfig)
-    return basic_replace_subtree_mutation(state.engine, parent)
+    engine = state.engine
+    for _attempt in 1:10
+        proposal = copy(parent.tree)
+        nodes = nodes_with_parent(proposal)
+        isempty(nodes) && return proposal
+        _, parent_node, side = rand(engine.rng, nodes)
+
+        subtree = if rand(engine.rng) < 0.5
+            random_terminal(engine)
+        else
+            arity = sample_operator_arity(engine; max_added_nodes=2)
+            if arity <= 0
+                random_terminal(engine)
+            else
+                op = sample_operator(engine, arity)
+                if arity == 1
+                    OpNode(op, random_terminal(engine), nothing)
+                else
+                    OpNode(op, random_terminal(engine), random_terminal(engine))
+                end
+            end
+        end
+
+        proposal = replace_subtree(proposal, parent_node, side, subtree)
+        valid_tree(engine, proposal) && return proposal
+    end
+    return nothing
 end
 
 function basic_acceptance(
