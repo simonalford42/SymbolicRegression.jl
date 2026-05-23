@@ -1,4 +1,4 @@
-# Default and PySR-compatible policy configurations for MinimalSR.jl.
+# PySR policy configuration for SkeletonSR.jl.
 
 # ─── Running search statistics ──────────────────────────────────────────────
 
@@ -51,7 +51,7 @@ function normalize!(stats::RunningSearchStatistics)
     end
 end
 
-# ─── PySR-compatible low-level operators ────────────────────────────────────
+# ─── PySR low-level operators ───────────────────────────────────────────────
 
 sample_indices(rng, n::Int, k::Int) = randperm(rng, n)[1:min(k, n)]
 
@@ -97,7 +97,7 @@ function oldest_survival(population::Vector{Individual}, rng, exclude_indices::S
     return candidates[argmin(births)]
 end
 
-function default_mutation(engine::RegularizedEvolutionEngine, tree::Node, mutation::Symbol)
+function pysr_apply_mutation(engine::RegularizedEvolutionEngine, tree::Node, mutation::Symbol)
     tree = copy(tree)
     nodes = nodes_with_parent(tree)
     leaves = leaf_nodes(tree)
@@ -203,7 +203,7 @@ function default_mutation(engine::RegularizedEvolutionEngine, tree::Node, mutati
     return tree
 end
 
-function default_crossover(engine::RegularizedEvolutionEngine, parent1::Node, parent2::Node)
+function pysr_subtree_crossover(engine::RegularizedEvolutionEngine, parent1::Node, parent2::Node)
     t1 = copy(parent1)
     t2 = copy(parent2)
     n1 = nodes_with_parent(t1)
@@ -215,7 +215,7 @@ function default_crossover(engine::RegularizedEvolutionEngine, parent1::Node, pa
     return t1, t2
 end
 
-function default_migration(engine::RegularizedEvolutionEngine, populations::Vector{Vector{Individual}},
+function pysr_migration(engine::RegularizedEvolutionEngine, populations::Vector{Vector{Individual}},
                            pop_idx::Int, dominating::Vector{Individual})
     cfg = engine.cfg
     target = populations[pop_idx]
@@ -333,203 +333,21 @@ function write_hof_log(engine::RegularizedEvolutionEngine, cycle::Int,
     end
 end
 
-# ─── Shared policy helpers ───────────────────────────────────────────────────
-
-function minimal_random_subtree(engine::RegularizedEvolutionEngine)
-    rand(engine.rng) < 0.5 && return random_terminal(engine)
-    arity = sample_operator_arity(engine; max_added_nodes=2)
-    arity <= 0 && return random_terminal(engine)
-    op = sample_operator(engine, arity)
-    arity == 1 && return OpNode(op, random_terminal(engine), nothing)
-    return OpNode(op, random_terminal(engine), random_terminal(engine))
-end
-
-function minimal_replace_subtree_mutation(engine::RegularizedEvolutionEngine, tree::Node)
-    tree = copy(tree)
-    nodes = nodes_with_parent(tree)
-    isempty(nodes) && return tree
-    _, parent, side = rand(engine.rng, nodes)
-    subtree = minimal_random_subtree(engine)
-    return replace_subtree(tree, parent, side, subtree)
-end
-
-function default_replace_subtree_mutation(engine::RegularizedEvolutionEngine, parent::Individual)
-    for _attempt in 1:10
-        proposal = minimal_replace_subtree_mutation(engine, parent.tree)
-        valid_tree(engine, proposal) && return proposal
-    end
-    return nothing
-end
-
-function simple_tournament_select(population::Vector{Individual}, cfg::EngineConfig, rng)
-    n = length(population)
-    k = min(max(1, cfg.tournament_selection_n), n)
-    candidate_idx = sample_indices(rng, n, k)
-    costs = [population[i].cost for i in candidate_idx]
-    return candidate_idx[argmin(costs)]
-end
-
-function topk_survive!(population::Vector{Individual}, offspring::Vector{Individual}, cfg::EngineConfig)
-    isempty(offspring) && return nothing
-    combined = vcat(copy.(population), copy.(offspring))
-    sort!(combined, by=m -> (m.cost, m.loss, m.complexity, m.birth))
-    keep = min(length(population), cfg.population_size, length(combined))
-    empty!(population)
-    append!(population, combined[1:keep])
-    return nothing
-end
-
-mse_loss_function(tree::Node, state::EngineState, _config::MinimalSRConfig) =
+pysr_mse_loss_function(tree::Node, state::EngineState, _config::SkeletonSRConfig) =
     MS.evaluate_candidate(state.engine, tree)
 
-always_accept(
-    _parent::Individual, _child::Individual, _state::EngineState, _config::MinimalSRConfig
-) = true
-
-function subtree_swap_crossover(parent_a::Individual, parent_b::Individual, state::EngineState,
-                                _config::MinimalSRConfig)
+function pysr_subtree_swap_crossover(parent_a::Individual, parent_b::Individual,
+                                     state::EngineState, _config::SkeletonSRConfig)
     for _attempt in 1:10
-        t1, t2 = MS.default_crossover(state.engine, parent_a.tree, parent_b.tree)
+        t1, t2 = MS.pysr_subtree_crossover(state.engine, parent_a.tree, parent_b.tree)
         MS.valid_tree(state.engine, t1) && MS.valid_tree(state.engine, t2) && return (t1, t2)
     end
     return nothing
 end
 
-# ─── Default policy ──────────────────────────────────────────────────────────
+# ─── PySR policy ─────────────────────────────────────────────────────────────
 
-mutable struct BasicPolicyState <: AbstractPolicyState
-    archive::Vector{Individual}
-    archive_initialized::Bool
-    archive_counted_population_cycles::Vector{Int}
-end
-
-function BasicPolicyState(cfg::MS.EngineConfig)
-    return BasicPolicyState(Individual[], false, zeros(Int, max(1, cfg.populations)))
-end
-
-result_members(policy_state::BasicPolicyState) = policy_state.archive
-
-function default_minimal_kwargs(; kwargs...)
-    defaults = (
-        binary_operators=String["+", "-", "*", "/"],
-        unary_operators=String[],
-        constants=Float64[],
-        constraints=Dict{String, Any}(),
-        nested_constraints=Dict{String, Any}(),
-        population_size=100,
-        populations=1,
-        niterations=100,
-        ncycles_per_iteration=1,
-        maxsize=30,
-        maxdepth=10,
-        parsimony=0.0,
-        tournament_selection_n=5,
-        tournament_selection_p=1.0,
-        crossover_probability=0.1,
-        skip_mutation_failures=true,
-        use_frequency=false,
-        use_frequency_in_tournament=false,
-        adaptive_parsimony_scaling=0.0,
-        annealing=false,
-        alpha=1.0,
-        perturbation_factor=0.1,
-        probability_negate_constant=0.0,
-        migration=false,
-        hof_migration=false,
-        fraction_replaced=0.0,
-        fraction_replaced_hof=0.0,
-        topn=10,
-        should_optimize_constants=false,
-        optimize_probability=0.0,
-        optimizer_iterations=8,
-        optimizer_nrestarts=1,
-        should_simplify=false,
-    )
-    return merge(defaults, (; kwargs...))
-end
-
-function basic_selection(population::Population, state::EngineState, config::MinimalSRConfig)
-    idx = MS.simple_tournament_select(population, config.engine_config, state.engine.rng)
-    return population[idx]
-end
-
-function basic_survival(population::Population, candidates::Vector{Individual},
-                        _state::EngineState, config::MinimalSRConfig)
-    output = copy(population)
-    MS.topk_survive!(output, candidates, config.engine_config)
-    return output
-end
-
-function basic_mutation(parent::Individual, state::EngineState, _config::MinimalSRConfig)
-    return MS.default_replace_subtree_mutation(state.engine, parent)
-end
-
-init_basic_state(config::MinimalSRConfig) = BasicPolicyState(config.engine_config)
-
-function basic_update_state!(populations::Vector{Population}, state::EngineState{BasicPolicyState},
-                             config::MinimalSRConfig)
-    policy_state = state.policy_state
-    pop_indices = if !policy_state.archive_initialized
-        collect(eachindex(populations))
-    else
-        [
-            i for i in eachindex(populations) if
-            state.completed_population_cycles[i] > policy_state.archive_counted_population_cycles[i]
-        ]
-    end
-    isempty(pop_indices) && return nothing
-
-    combined = copy(policy_state.archive)
-    for i in pop_indices
-        append!(combined, copy.(populations[i]))
-    end
-    sort!(combined, by=m -> (m.loss, m.cost, m.complexity, m.birth))
-    empty!(policy_state.archive)
-    seen = Set{String}()
-    for member in combined
-        isfinite(member.loss) || continue
-        key = MS.node_string(member.tree)
-        key in seen && continue
-        push!(seen, key)
-        push!(policy_state.archive, copy(member))
-        length(policy_state.archive) >= max(1, config.engine_config.topn) && break
-    end
-    for i in pop_indices
-        policy_state.archive_counted_population_cycles[i] = state.completed_population_cycles[i]
-    end
-    policy_state.archive_initialized = true
-    return nothing
-end
-
-basic_update_population(_policy_state::BasicPolicyState, populations::Vector{Population},
-                        _state::EngineState, _config::MinimalSRConfig) = populations
-
-function basic_policy()
-    return MinimalSRPolicy(;
-        init_state=init_basic_state,
-        loss_function=mse_loss_function,
-        survival=basic_survival,
-        selection=basic_selection,
-        mutation=basic_mutation,
-        acceptance=always_accept,
-        crossover=subtree_swap_crossover,
-        update_population=basic_update_population,
-        update_state! = basic_update_state!,
-    )
-end
-
-function default_minimal_config(; kwargs...)
-    nt = default_minimal_kwargs(; kwargs...)
-    cfg = engine_config_from_namedtuple(nt)
-    return MinimalSRConfig(; engine_config=cfg, policy=basic_policy())
-end
-
-fit_default_sr(args...; kwargs...) =
-    fit_minimal_sr(args...; config=default_minimal_config(; kwargs...))
-
-# ─── PySR-compatible policy ──────────────────────────────────────────────────
-
-mutable struct PySRPolicyState <: AbstractPolicyState
+mutable struct PySRState <: AbstractPolicyState
     best_by_complexity::Dict{Int, Individual}
     frontier::Vector{Individual}
     per_population_stats::Vector{MS.RunningSearchStatistics}
@@ -540,9 +358,9 @@ mutable struct PySRPolicyState <: AbstractPolicyState
     last_logged_cycle::Int
 end
 
-function PySRPolicyState(cfg::MS.EngineConfig)
+function PySRState(cfg::MS.EngineConfig)
     n = max(1, cfg.populations)
-    return PySRPolicyState(
+    return PySRState(
         Dict{Int, Individual}(),
         Individual[],
         [MS.RunningSearchStatistics(cfg.maxsize) for _ in 1:n],
@@ -554,12 +372,12 @@ function PySRPolicyState(cfg::MS.EngineConfig)
     )
 end
 
-current_stats(state::EngineState{PySRPolicyState}) =
+current_stats(state::EngineState{PySRState}) =
     state.policy_state.per_population_stats[state.current_population]
 
-result_members(policy_state::PySRPolicyState) = policy_state.frontier
+result_members(policy_state::PySRState) = policy_state.frontier
 
-const PYSR_COMPAT_MUTATION_NAMES = [
+const PYSR_MUTATION_NAMES = [
     :add_node,
     :insert_node,
     :delete_node,
@@ -574,7 +392,7 @@ const PYSR_COMPAT_MUTATION_NAMES = [
     :optimize,
 ]
 
-const PYSR_COMPAT_MUTATION_WEIGHTS = Dict{Symbol, Float64}(
+const PYSR_MUTATION_WEIGHTS = Dict{Symbol, Float64}(
     :add_node => 2.47,
     :insert_node => 0.0112,
     :delete_node => 0.87,
@@ -593,8 +411,8 @@ function conditioned_pysr_mutation_weights(engine::RegularizedEvolutionEngine, t
     nodes = nodes_with_parent(tree)
     leaves = leaf_nodes(tree)
     n_constants = count(n -> n isa ConstNode, leaves)
-    names = copy(PYSR_COMPAT_MUTATION_NAMES)
-    w = Dict(name => max(0.0, PYSR_COMPAT_MUTATION_WEIGHTS[name]) for name in names)
+    names = copy(PYSR_MUTATION_NAMES)
+    w = Dict(name => max(0.0, PYSR_MUTATION_WEIGHTS[name]) for name in names)
     if isleaf(tree)
         w[:mutate_operator] = 0.0
         w[:swap_operands] = 0.0
@@ -629,13 +447,13 @@ end
 function pysr_weighted_mutation(engine::RegularizedEvolutionEngine, parent::Individual)
     mutation = sample_pysr_mutation_choice(engine, parent.tree)
     for _attempt in 1:10
-        proposal = default_mutation(engine, parent.tree, mutation)
+        proposal = pysr_apply_mutation(engine, parent.tree, mutation)
         valid_tree(engine, proposal) && return proposal
     end
     return nothing
 end
 
-function pysr_compat_kwargs(; kwargs...)
+function pysr_kwargs(; kwargs...)
     defaults = (
         binary_operators=String["+", "-", "*", "/"],
         unary_operators=String["sin", "cos", "exp", "log", "sqrt", "square"],
@@ -675,14 +493,14 @@ function pysr_compat_kwargs(; kwargs...)
     return merge(defaults, (; kwargs...))
 end
 
-function pysr_selection(population::Population, state::EngineState, config::MinimalSRConfig)
+function pysr_selection(population::Population, state::EngineState, config::SkeletonSRConfig)
     stats = current_stats(state)
     idx = MS.tournament_select(population, stats, config.engine_config, state.engine.rng)
     return population[idx]
 end
 
 function pysr_survival(population::Population, candidates::Vector{Individual},
-                       state::EngineState, _config::MinimalSRConfig)
+                       state::EngineState, _config::SkeletonSRConfig)
     output = copy(population)
     used = Set{Int}()
     for candidate in candidates
@@ -694,21 +512,21 @@ function pysr_survival(population::Population, candidates::Vector{Individual},
     return output
 end
 
-function pysr_mutation(parent::Individual, state::EngineState, _config::MinimalSRConfig)
+function pysr_mutation(parent::Individual, state::EngineState, _config::SkeletonSRConfig)
     return MS.pysr_weighted_mutation(state.engine, parent)
 end
 
 function pysr_acceptance(parent::Individual, child::Individual, state::EngineState,
-                         _config::MinimalSRConfig)
+                         _config::SkeletonSRConfig)
     return MS.accept_candidate(
         state.engine, parent, child, current_stats(state), state.policy_state.current_temperature
     )
 end
 
-init_pysr_state(config::MinimalSRConfig) = PySRPolicyState(config.engine_config)
+init_pysr_state(config::SkeletonSRConfig) = PySRState(config.engine_config)
 
-function pysr_update_state!(populations::Vector{Population}, state::EngineState{PySRPolicyState},
-                            config::MinimalSRConfig)
+function pysr_update_state!(populations::Vector{Population}, state::EngineState{PySRState},
+                            config::SkeletonSRConfig)
     policy_state = state.policy_state
     was_archive_initialized = policy_state.archive_initialized
     archive_pop_indices = if !policy_state.archive_initialized
@@ -771,31 +589,31 @@ function pysr_update_state!(populations::Vector{Population}, state::EngineState{
     return nothing
 end
 
-function pysr_update_population(policy_state::PySRPolicyState, populations::Vector{Population},
-                                state::EngineState, _config::MinimalSRConfig)
-    MS.default_migration(state.engine, populations, state.current_population, policy_state.frontier)
+function pysr_update_population(policy_state::PySRState, populations::Vector{Population},
+                                state::EngineState, _config::SkeletonSRConfig)
+    MS.pysr_migration(state.engine, populations, state.current_population, policy_state.frontier)
     return populations
 end
 
 function pysr_policy()
-    return MinimalSRPolicy(;
+    return SkeletonSRPolicy(;
         init_state=init_pysr_state,
-        loss_function=mse_loss_function,
+        loss_function=pysr_mse_loss_function,
         survival=pysr_survival,
         selection=pysr_selection,
         mutation=pysr_mutation,
         acceptance=pysr_acceptance,
-        crossover=subtree_swap_crossover,
+        crossover=pysr_subtree_swap_crossover,
         update_population=pysr_update_population,
         update_state! = pysr_update_state!,
     )
 end
 
-function pysr_compat_config(; kwargs...)
-    nt = pysr_compat_kwargs(; kwargs...)
+function pysr_config(; kwargs...)
+    nt = pysr_kwargs(; kwargs...)
     cfg = engine_config_from_namedtuple(nt)
-    return MinimalSRConfig(; engine_config=cfg, policy=pysr_policy())
+    return SkeletonSRConfig(; engine_config=cfg, policy=pysr_policy())
 end
 
-fit_pysr_compat_sr(args...; kwargs...) =
-    fit_minimal_sr(args...; config=pysr_compat_config(; kwargs...))
+fit_pysr_sr(args...; kwargs...) =
+    fit_skeleton_sr(args...; config=pysr_config(; kwargs...))

@@ -1,4 +1,4 @@
-@testitem "MinimalSR policies run and PySR policy matches MiniSR" begin
+@testitem "SkeletonSR policies run and PySR policy matches MiniSR" begin
     using SymbolicRegression
 
     Xj = hcat(
@@ -8,7 +8,7 @@
     yj = @. 1.5 * Xj[:, 1] - 0.75 * Xj[:, 2] + 0.2
     variable_names = ["x0", "x1"]
 
-    default_result = SymbolicRegression.MinimalSR.fit_default_sr(
+    basic_result = SymbolicRegression.SkeletonSR.fit_basic_sr(
         Xj,
         yj,
         variable_names;
@@ -26,9 +26,9 @@
         random_state=11,
     )
 
-    @test default_result["n_evals"] <= 120
-    @test !isempty(default_result["rows"])
-    @test length(default_result["rows"]) <= 5
+    @test basic_result["n_evals"] <= 120
+    @test !isempty(basic_result["rows"])
+    @test length(basic_result["rows"]) <= 5
 
     constraints = Dict{String, Any}(
         "/" => [-1, 6],
@@ -39,7 +39,7 @@
         "sin" => Dict("sin" => 0, "cos" => 0),
         "cos" => Dict("sin" => 0, "cos" => 0),
     )
-    compat_kwargs = (
+    pysr_kwargs = (
         binary_operators=["+", "-", "*", "/"],
         unary_operators=["sin", "cos"],
         constants=Float64[],
@@ -80,19 +80,19 @@
     )
 
     minisr_kwargs = merge(
-        compat_kwargs,
+        pysr_kwargs,
         (
-            mutation_weights=copy(SymbolicRegression.MinimalSR.PYSR_COMPAT_MUTATION_WEIGHTS),
-            mutation_weight_names=SymbolicRegression.MinimalSR.PYSR_COMPAT_MUTATION_NAMES,
+            mutation_weights=copy(SymbolicRegression.SkeletonSR.PYSR_MUTATION_WEIGHTS),
+            mutation_weight_names=SymbolicRegression.SkeletonSR.PYSR_MUTATION_NAMES,
         ),
     )
     minisr_result = SymbolicRegression.MiniSR.fit_mini_sr(
         Xj, yj, variable_names; minisr_kwargs...
     )
-    minimal_result = SymbolicRegression.MinimalSR.fit_pysr_compat_sr(
-        Xj, yj, variable_names; compat_kwargs...
+    skeleton_result = SymbolicRegression.SkeletonSR.fit_pysr_sr(
+        Xj, yj, variable_names; pysr_kwargs...
     )
 
-    @test minimal_result["n_evals"] == minisr_result["n_evals"]
-    @test minimal_result["rows"] == minisr_result["rows"]
+    @test skeleton_result["n_evals"] == minisr_result["n_evals"]
+    @test skeleton_result["rows"] == minisr_result["rows"]
 end

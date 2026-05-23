@@ -1,4 +1,4 @@
-module MinimalSR
+module SkeletonSR
 
 using PythonCall
 using Random
@@ -100,7 +100,7 @@ Base.@kwdef mutable struct EngineConfig
     constraints::Dict{Symbol, Any} = Dict{Symbol, Any}()
     nested_constraints::Dict{Symbol, Any} = Dict{Symbol, Any}()
     random_state::Int = 0
-    # If log_file is a non-empty path, PySR-compatible searches append one JSONL
+    # If log_file is a non-empty path, PySR searches append one JSONL
     # line per archive update recording the cycle, eval_count, progress and full
     # Pareto frontier. Equations use the internal x0..xN variable names.
     log_file::String = ""
@@ -589,7 +589,7 @@ mutable struct EngineState{P<:AbstractPolicyState}
     completed_population_cycles::Vector{Int}
 end
 
-Base.@kwdef struct MinimalSRPolicy
+Base.@kwdef struct SkeletonSRPolicy
     init_state::Function
     loss_function::Function
     survival::Function
@@ -601,9 +601,9 @@ Base.@kwdef struct MinimalSRPolicy
     update_state!::Function
 end
 
-Base.@kwdef struct MinimalSRConfig
+Base.@kwdef struct SkeletonSRConfig
     engine_config::MS.EngineConfig
-    policy::MinimalSRPolicy
+    policy::SkeletonSRPolicy
 end
 
 engine(state::EngineState) = state.engine
@@ -635,7 +635,7 @@ function engine_config_from_namedtuple(nt::NamedTuple)
     return MS.EngineConfig(; kwargs...)
 end
 
-function initialize_state(X, y, variable_names, config::MinimalSRConfig)
+function initialize_state(X, y, variable_names, config::SkeletonSRConfig)
     _ = variable_names
     eng = MS.RegularizedEvolutionEngine(Matrix{Float64}(X), Float64.(vec(y)), config.engine_config)
     policy_state = config.policy.init_state(config)
@@ -650,14 +650,14 @@ function initialize_state(X, y, variable_names, config::MinimalSRConfig)
     )
 end
 
-function initialize_populations!(state::EngineState, _X, _y, _config::MinimalSRConfig)
+function initialize_populations!(state::EngineState, _X, _y, _config::SkeletonSRConfig)
     n = max(1, state.engine.cfg.populations)
     state.populations = [MS.initialize_population(state.engine) for _ in 1:n]
     state.completed_population_cycles = zeros(Int, n)
     return nothing
 end
 
-has_budget(state::EngineState, _config::MinimalSRConfig) = MS.has_budget(state.engine)
+has_budget(state::EngineState, _config::SkeletonSRConfig) = MS.has_budget(state.engine)
 
 function cycles_for_population(population::Population, cfg::MS.EngineConfig)
     return Int(ceil(length(population) / max(1, cfg.tournament_selection_n)))
@@ -666,7 +666,7 @@ end
 should_crossover(rng, cfg::MS.EngineConfig, population::Population) =
     length(population) >= 2 && rand(rng) <= cfg.crossover_probability
 
-function make_individual(tree::Node, _X, _y, state::EngineState, config::MinimalSRConfig;
+function make_individual(tree::Node, _X, _y, state::EngineState, config::SkeletonSRConfig;
                          parent_ref::Union{Int, Nothing}=nothing)
     out = config.policy.loss_function(tree, state, config)
     out === nothing && return nothing
@@ -692,7 +692,7 @@ end
 
 # ─── Generic engine ─────────────────────────────────────────────────────────
 
-function fit_minimal_sr(X_in, y_in, variable_names_in; config::MinimalSRConfig)
+function fit_skeleton_sr(X_in, y_in, variable_names_in; config::SkeletonSRConfig)
     X = MS.as_matrix(X_in)
     y = MS.as_vector(y_in)
     variable_names = MS.as_strings(variable_names_in)
@@ -729,7 +729,7 @@ function fit_minimal_sr(X_in, y_in, variable_names_in; config::MinimalSRConfig)
     return format_result(state.policy_state, state, variable_names)
 end
 
-function evolve_cycle!(state::EngineState, pop_index::Int, X, y, config::MinimalSRConfig)
+function evolve_cycle!(state::EngineState, pop_index::Int, X, y, config::SkeletonSRConfig)
     cfg = config.engine_config
     policy = config.policy
     population = state.populations[pop_index]
@@ -783,7 +783,7 @@ function evolve_cycle!(state::EngineState, pop_index::Int, X, y, config::Minimal
 end
 
 function optimize_and_simplify_population!(
-    population::Population, state::EngineState, _config::MinimalSRConfig
+    population::Population, state::EngineState, _config::SkeletonSRConfig
 )
     return MS.optimize_and_simplify!(state.engine, population)
 end
@@ -810,6 +810,7 @@ function format_result(
     return Dict("rows" => rows, "n_evals" => state.engine.eval_count)
 end
 
-include("MinimalSRConfig.jl")
+include("BasicSRConfig.jl")
+include("PySRConfig.jl")
 
 end
