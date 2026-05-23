@@ -4,7 +4,6 @@ module BasicSRConfig
 
 using Random: rand, randperm
 
-import ..SkeletonSR: result_members
 using ..SkeletonSR:
     AbstractPolicyState,
     EngineConfig,
@@ -46,8 +45,6 @@ end
 function BasicSRState(cfg::EngineConfig, options::BasicSROptions)
     return BasicSRState(options, Individual[], false, zeros(Int, max(1, cfg.populations)))
 end
-
-result_members(policy_state::BasicSRState) = policy_state.archive
 
 function basic_sr_kwargs(; kwargs...)
     defaults = (

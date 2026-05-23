@@ -5,7 +5,6 @@ module PySRConfig
 using Logging: @warn
 using Random: AbstractRNG, rand, randn, randperm
 
-import ..SkeletonSR: result_members
 using ..SkeletonSR:
     AbstractPolicyState,
     ConstNode,
@@ -426,7 +425,7 @@ end
 mutable struct PySRState <: AbstractPolicyState
     options::PySROptions
     best_by_complexity::Dict{Int, Individual}
-    frontier::Vector{Individual}
+    archive::Vector{Individual}
     per_population_stats::Vector{RunningSearchStatistics}
     current_temperature::Float64
     counted_population_cycles::Vector{Int}
@@ -452,8 +451,6 @@ end
 
 current_stats(state::EngineState{PySRState}) =
     state.policy_state.per_population_stats[state.current_population]
-
-result_members(policy_state::PySRState) = policy_state.frontier
 
 const PYSR_MUTATION_NAMES = [
     :add_node,
@@ -636,7 +633,7 @@ function pysr_update_state!(populations::Vector{Population}, state::EngineState{
                 policy_state.best_by_complexity[c] = copy(member)
             end
         end
-        policy_state.frontier = calculate_pareto_frontier_from_dict(
+        policy_state.archive = calculate_pareto_frontier_from_dict(
             policy_state.best_by_complexity
         )
         for i in archive_pop_indices
@@ -648,7 +645,7 @@ function pysr_update_state!(populations::Vector{Population}, state::EngineState{
                 (state.current_iteration - 1) * length(populations) + (state.current_population - 1) :
                 -1
             if cycle > policy_state.last_logged_cycle
-                write_hof_log(state.engine, cycle, policy_state.frontier, options)
+                write_hof_log(state.engine, cycle, policy_state.archive, options)
                 policy_state.last_logged_cycle = cycle
             end
         end
@@ -685,7 +682,7 @@ function pysr_update_population(policy_state::PySRState, populations::Vector{Pop
         state.engine,
         populations,
         state.current_population,
-        policy_state.frontier,
+        policy_state.archive,
         policy_state.options,
     )
     return populations

@@ -611,8 +611,6 @@ Base.@kwdef struct SkeletonSRConfig
 end
 
 engine(state::EngineState) = state.engine
-result_members(policy_state::AbstractPolicyState) =
-    error("No result_members method is defined for $(typeof(policy_state)).")
 
 function engine_config_from_kwargs(; kwargs...)
     return EngineConfig(; kwargs...)
@@ -790,7 +788,7 @@ function format_result(
     policy_state::AbstractPolicyState, state::EngineState, variable_names::Vector{String}
 )
     rows = Vector{Dict{String, Any}}()
-    members = result_members(policy_state)
+    members = policy_state.archive
     if isempty(members)
         best = state.populations[1][1]
         for pop in state.populations, member in pop
