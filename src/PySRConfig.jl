@@ -3,7 +3,7 @@
 module PySRConfig
 
 using Logging: @warn
-using Random: AbstractRNG, randperm
+using Random: AbstractRNG, rand, randn, randperm
 
 import ..SkeletonSR: result_members
 using ..SkeletonSR:
@@ -30,6 +30,7 @@ using ..SkeletonSR:
     next_ref!,
     node_string,
     nodes_with_parent,
+    optimize_and_simplify!,
     prepend_random_op,
     random_tree_fixed_size,
     replace_subtree,
@@ -38,6 +39,33 @@ using ..SkeletonSR:
     weighted_choice
 
 # ─── Running search statistics ──────────────────────────────────────────────
+
+Base.@kwdef struct PySROptions
+    parsimony::Float64 = 0.0
+    tournament_selection_n::Int = 15
+    tournament_selection_p::Float64 = 0.982
+    crossover_probability::Float64 = 0.0259
+    skip_mutation_failures::Bool = true
+    use_frequency::Bool = true
+    use_frequency_in_tournament::Bool = true
+    adaptive_parsimony_scaling::Float64 = 1040.0
+    annealing::Bool = false
+    alpha::Float64 = 3.17
+    perturbation_factor::Float64 = 0.129
+    probability_negate_constant::Float64 = 0.00743
+    migration::Bool = true
+    hof_migration::Bool = true
+    fraction_replaced::Float64 = 0.00036
+    fraction_replaced_hof::Float64 = 0.0614
+    topn::Int = 12
+    should_optimize_constants::Bool = true
+    optimize_probability::Float64 = 0.14
+    optimizer_iterations::Int = 8
+    optimizer_nrestarts::Int = 2
+    optimizer_f_calls_limit::Union{Int, Nothing} = 10_000
+    should_simplify::Bool = true
+    log_file::String = ""
+end
 
 mutable struct RunningSearchStatistics
     frequencies::Vector{Float64}
@@ -104,22 +132,22 @@ function poisson_sample(rng::AbstractRNG, λ::Float64)
 end
 
 function tournament_select(population::Vector{Individual}, stats::RunningSearchStatistics,
-                           cfg::EngineConfig, rng)
+                           options::PySROptions, maxsize::Int, rng)
     n = length(population)
-    k = min(cfg.tournament_selection_n, n)
+    k = min(options.tournament_selection_n, n)
     candidate_idx = sample_indices(rng, n, k)
     adjusted_costs = Float64[]
     for idx in candidate_idx
         member = population[idx]
         cost = member.cost
-        if cfg.use_frequency_in_tournament && 1 <= member.complexity <= cfg.maxsize
+        if options.use_frequency_in_tournament && 1 <= member.complexity <= maxsize
             freq = stats.normalized_frequencies[member.complexity]
-            cost *= exp(clamp(cfg.adaptive_parsimony_scaling * freq, -50.0, 50.0))
+            cost *= exp(clamp(options.adaptive_parsimony_scaling * freq, -50.0, 50.0))
         end
         push!(adjusted_costs, cost)
     end
     order = sortperm(adjusted_costs)
-    p = cfg.tournament_selection_p
+    p = options.tournament_selection_p
     p >= 1.0 && return candidate_idx[order[1]]
     weights = [p * ((1 - p) ^ i) for i in 0:(k - 1)]
     weights ./= sum(weights)
@@ -134,7 +162,9 @@ function oldest_survival(population::Vector{Individual}, rng, exclude_indices::S
     return candidates[argmin(births)]
 end
 
-function pysr_apply_mutation(engine::RegularizedEvolutionEngine, tree::Node, mutation::Symbol)
+function pysr_apply_mutation(
+    engine::RegularizedEvolutionEngine, tree::Node, mutation::Symbol, options::PySROptions
+)
     tree = copy(tree)
     nodes = nodes_with_parent(tree)
     leaves = leaf_nodes(tree)
@@ -146,10 +176,10 @@ function pysr_apply_mutation(engine::RegularizedEvolutionEngine, tree::Node, mut
             node = rand(engine.rng, constants)
             temperature = clamp(engine.current_temperature, 0.0, 1.0)
             bottom = 0.1
-            max_change = engine.cfg.perturbation_factor * temperature + 1.0 + bottom
+            max_change = options.perturbation_factor * temperature + 1.0 + bottom
             factor = max_change ^ rand(engine.rng)
             rand(engine.rng) < 0.5 && (factor = 1.0 / factor)
-            rand(engine.rng) > engine.cfg.probability_negate_constant && (factor *= -1.0)
+            rand(engine.rng) > options.probability_negate_constant && (factor *= -1.0)
             node.value = clamp(node.value * factor, -1e6, 1e6)
         end
         return tree
@@ -253,8 +283,7 @@ function pysr_subtree_crossover(engine::RegularizedEvolutionEngine, parent1::Nod
 end
 
 function pysr_migration(engine::RegularizedEvolutionEngine, populations::Vector{Vector{Individual}},
-                           pop_idx::Int, dominating::Vector{Individual})
-    cfg = engine.cfg
+                        pop_idx::Int, dominating::Vector{Individual}, options::PySROptions)
     target = populations[pop_idx]
     isempty(target) && return
     function replace_from!(candidates::Vector{Individual}, frac::Float64)
@@ -270,28 +299,29 @@ function pysr_migration(engine::RegularizedEvolutionEngine, populations::Vector{
             target[dst] = src
         end
     end
-    if cfg.migration
+    if options.migration
         best_of_each = Individual[]
         for pop in populations
             isempty(pop) && continue
-            topk = sort(pop, by=m -> m.cost)[1:max(1, min(cfg.topn, length(pop)))]
+            topk = sort(pop, by=m -> m.cost)[1:max(1, min(options.topn, length(pop)))]
             append!(best_of_each, copy.(topk))
         end
-        replace_from!(best_of_each, cfg.fraction_replaced)
+        replace_from!(best_of_each, options.fraction_replaced)
     end
-    cfg.hof_migration && replace_from!(dominating, cfg.fraction_replaced_hof)
+    options.hof_migration && replace_from!(dominating, options.fraction_replaced_hof)
 end
 
 function accept_candidate(engine::RegularizedEvolutionEngine, parent::Individual, child::Individual,
-                          stats::RunningSearchStatistics, temperature::Float64)
+                          stats::RunningSearchStatistics, temperature::Float64,
+                          options::PySROptions)
     isfinite(child.cost) || return false
     prob = 1.0
-    if engine.cfg.annealing
+    if options.annealing
         delta = child.cost - parent.cost
-        denom = max(1e-8, temperature * engine.cfg.alpha)
+        denom = max(1e-8, temperature * options.alpha)
         prob *= exp(clamp(-delta / denom, -50.0, 50.0))
     end
-    if engine.cfg.use_frequency
+    if options.use_frequency
         old_size = min(max(parent.complexity, 1), engine.cfg.maxsize)
         new_size = min(max(child.complexity, 1), engine.cfg.maxsize)
         old_f = stats.normalized_frequencies[old_size]
@@ -345,8 +375,8 @@ function _json_float(x::Float64)
 end
 
 function write_hof_log(engine::RegularizedEvolutionEngine, cycle::Int,
-                       dominating::Vector{Individual})
-    path = engine.cfg.log_file
+                       dominating::Vector{Individual}, options::PySROptions)
+    path = options.log_file
     isempty(path) && return
     budget = engine.eval_budget
     progress = (isnothing(budget) || budget == 0) ? 0.0 : engine.eval_count / budget
@@ -370,8 +400,12 @@ function write_hof_log(engine::RegularizedEvolutionEngine, cycle::Int,
     end
 end
 
-pysr_mse_loss_function(tree::Node, state::EngineState, _config::SkeletonSRConfig) =
-    evaluate_candidate(state.engine, tree)
+function pysr_mse_loss_function(tree::Node, state::EngineState, _config::SkeletonSRConfig)
+    out = evaluate_candidate(state.engine, tree)
+    out === nothing && return nothing
+    loss, cost, complexity = out
+    return (loss, cost + state.policy_state.options.parsimony * complexity, complexity)
+end
 
 function pysr_subtree_swap_crossover(parent_a::Individual, parent_b::Individual,
                                      state::EngineState, _config::SkeletonSRConfig)
@@ -385,6 +419,7 @@ end
 # ─── PySR policy ─────────────────────────────────────────────────────────────
 
 mutable struct PySRState <: AbstractPolicyState
+    options::PySROptions
     best_by_complexity::Dict{Int, Individual}
     frontier::Vector{Individual}
     per_population_stats::Vector{RunningSearchStatistics}
@@ -395,9 +430,10 @@ mutable struct PySRState <: AbstractPolicyState
     last_logged_cycle::Int
 end
 
-function PySRState(cfg::EngineConfig)
+function PySRState(cfg::EngineConfig, options::PySROptions)
     n = max(1, cfg.populations)
     return PySRState(
+        options,
         Dict{Int, Individual}(),
         Individual[],
         [RunningSearchStatistics(cfg.maxsize) for _ in 1:n],
@@ -444,7 +480,9 @@ const PYSR_MUTATION_WEIGHTS = Dict{Symbol, Float64}(
     :optimize => 0.0,
 )
 
-function conditioned_pysr_mutation_weights(engine::RegularizedEvolutionEngine, tree::Node)
+function conditioned_pysr_mutation_weights(
+    engine::RegularizedEvolutionEngine, tree::Node, options::PySROptions
+)
     nodes = nodes_with_parent(tree)
     leaves = leaf_nodes(tree)
     n_constants = count(n -> n isa ConstNode, leaves)
@@ -468,12 +506,14 @@ function conditioned_pysr_mutation_weights(engine::RegularizedEvolutionEngine, t
     w[:mutate_constant] *= min(8, n_constants) / 8.0
     engine.n_features <= 1 && (w[:mutate_feature] = 0.0)
     tree_size(tree) >= engine.cfg.maxsize && ((w[:add_node] = 0.0); (w[:insert_node] = 0.0))
-    !engine.cfg.should_simplify && (w[:simplify] = 0.0)
+    !options.should_simplify && (w[:simplify] = 0.0)
     return names, w
 end
 
-function sample_pysr_mutation_choice(engine::RegularizedEvolutionEngine, tree::Node)
-    names, w = conditioned_pysr_mutation_weights(engine, tree)
+function sample_pysr_mutation_choice(
+    engine::RegularizedEvolutionEngine, tree::Node, options::PySROptions
+)
+    names, w = conditioned_pysr_mutation_weights(engine, tree, options)
     weights = [w[n] for n in names]
     total = sum(weights)
     total <= 0 && return :do_nothing
@@ -481,10 +521,12 @@ function sample_pysr_mutation_choice(engine::RegularizedEvolutionEngine, tree::N
     return weighted_choice(engine.rng, names, weights)
 end
 
-function pysr_weighted_mutation(engine::RegularizedEvolutionEngine, parent::Individual)
-    mutation = sample_pysr_mutation_choice(engine, parent.tree)
+function pysr_weighted_mutation(
+    engine::RegularizedEvolutionEngine, parent::Individual, options::PySROptions
+)
+    mutation = sample_pysr_mutation_choice(engine, parent.tree, options)
     for _attempt in 1:10
-        proposal = pysr_apply_mutation(engine, parent.tree, mutation)
+        proposal = pysr_apply_mutation(engine, parent.tree, mutation, options)
         valid_tree(engine, proposal) && return proposal
     end
     return nothing
@@ -532,7 +574,9 @@ end
 
 function pysr_selection(population::Population, state::EngineState, config::SkeletonSRConfig)
     stats = current_stats(state)
-    idx = tournament_select(population, stats, config.engine_config, state.engine.rng)
+    idx = tournament_select(
+        population, stats, state.policy_state.options, config.engine_config.maxsize, state.engine.rng
+    )
     return population[idx]
 end
 
@@ -550,21 +594,25 @@ function pysr_survival(population::Population, candidates::Vector{Individual},
 end
 
 function pysr_mutation(parent::Individual, state::EngineState, _config::SkeletonSRConfig)
-    return pysr_weighted_mutation(state.engine, parent)
+    return pysr_weighted_mutation(state.engine, parent, state.policy_state.options)
 end
 
 function pysr_acceptance(parent::Individual, child::Individual, state::EngineState,
                          _config::SkeletonSRConfig)
     return accept_candidate(
-        state.engine, parent, child, current_stats(state), state.policy_state.current_temperature
+        state.engine,
+        parent,
+        child,
+        current_stats(state),
+        state.policy_state.current_temperature,
+        state.policy_state.options,
     )
 end
-
-init_pysr_state(config::SkeletonSRConfig) = PySRState(config.engine_config)
 
 function pysr_update_state!(populations::Vector{Population}, state::EngineState{PySRState},
                             config::SkeletonSRConfig)
     policy_state = state.policy_state
+    options = policy_state.options
     was_archive_initialized = policy_state.archive_initialized
     archive_pop_indices = if !policy_state.archive_initialized
         collect(eachindex(populations))
@@ -590,12 +638,12 @@ function pysr_update_state!(populations::Vector{Population}, state::EngineState{
             policy_state.archive_counted_population_cycles[i] = state.completed_population_cycles[i]
         end
         policy_state.archive_initialized = true
-        if !isempty(config.engine_config.log_file)
+        if !isempty(options.log_file)
             cycle = was_archive_initialized ?
                 (state.current_iteration - 1) * length(populations) + (state.current_population - 1) :
                 -1
             if cycle > policy_state.last_logged_cycle
-                write_hof_log(state.engine, cycle, policy_state.frontier)
+                write_hof_log(state.engine, cycle, policy_state.frontier, options)
                 policy_state.last_logged_cycle = cycle
             end
         end
@@ -605,7 +653,7 @@ function pysr_update_state!(populations::Vector{Population}, state::EngineState{
     stats = current_stats(state)
 
     normalize!(stats)
-    if cfg.annealing && cfg.ncycles_per_iteration > 1
+    if options.annealing && cfg.ncycles_per_iteration > 1
         denom = max(1, cfg.ncycles_per_iteration - 1)
         policy_state.current_temperature = 1.0 - (state.current_inner_cycle - 1) / denom
     else
@@ -628,19 +676,56 @@ end
 
 function pysr_update_population(policy_state::PySRState, populations::Vector{Population},
                                 state::EngineState, _config::SkeletonSRConfig)
-    pysr_migration(state.engine, populations, state.current_population, policy_state.frontier)
+    pysr_migration(
+        state.engine,
+        populations,
+        state.current_population,
+        policy_state.frontier,
+        policy_state.options,
+    )
     return populations
 end
 
-function pysr_policy()
+function pysr_cycles_per_population(population::Population, state::EngineState, _config::SkeletonSRConfig)
+    return Int(ceil(length(population) / max(1, state.policy_state.options.tournament_selection_n)))
+end
+
+function pysr_should_crossover(population::Population, state::EngineState, _config::SkeletonSRConfig)
+    return length(population) >= 2 &&
+        rand(state.engine.rng) <= state.policy_state.options.crossover_probability
+end
+
+pysr_skip_mutation_failures(state::EngineState, _config::SkeletonSRConfig) =
+    state.policy_state.options.skip_mutation_failures
+
+function pysr_postprocess_population!(population::Population, state::EngineState, _config::SkeletonSRConfig)
+    options = state.policy_state.options
+    return optimize_and_simplify!(
+        state.engine,
+        population;
+        parsimony=options.parsimony,
+        should_simplify=options.should_simplify,
+        should_optimize_constants=options.should_optimize_constants,
+        optimize_probability=options.optimize_probability,
+        optimizer_iterations=options.optimizer_iterations,
+        optimizer_nrestarts=options.optimizer_nrestarts,
+        optimizer_f_calls_limit=options.optimizer_f_calls_limit,
+    )
+end
+
+function pysr_policy(options::PySROptions)
     return SkeletonSRPolicy(;
-        init_state=init_pysr_state,
+        init_state=config -> PySRState(config.engine_config, options),
         loss_function=pysr_mse_loss_function,
         survival=pysr_survival,
         selection=pysr_selection,
         mutation=pysr_mutation,
         acceptance=pysr_acceptance,
         crossover=pysr_subtree_swap_crossover,
+        cycles_per_population=pysr_cycles_per_population,
+        should_crossover=pysr_should_crossover,
+        skip_mutation_failures=pysr_skip_mutation_failures,
+        postprocess_population! = pysr_postprocess_population!,
         update_population=pysr_update_population,
         update_state! = pysr_update_state!,
     )
@@ -649,7 +734,33 @@ end
 function pysr_config(; kwargs...)
     nt = pysr_kwargs(; kwargs...)
     cfg = engine_config_from_namedtuple(nt)
-    return SkeletonSRConfig(; engine_config=cfg, policy=pysr_policy())
+    options = PySROptions(;
+        parsimony=nt.parsimony,
+        tournament_selection_n=nt.tournament_selection_n,
+        tournament_selection_p=nt.tournament_selection_p,
+        crossover_probability=nt.crossover_probability,
+        skip_mutation_failures=nt.skip_mutation_failures,
+        use_frequency=nt.use_frequency,
+        use_frequency_in_tournament=nt.use_frequency_in_tournament,
+        adaptive_parsimony_scaling=nt.adaptive_parsimony_scaling,
+        annealing=nt.annealing,
+        alpha=nt.alpha,
+        perturbation_factor=nt.perturbation_factor,
+        probability_negate_constant=nt.probability_negate_constant,
+        migration=nt.migration,
+        hof_migration=nt.hof_migration,
+        fraction_replaced=nt.fraction_replaced,
+        fraction_replaced_hof=nt.fraction_replaced_hof,
+        topn=nt.topn,
+        should_optimize_constants=nt.should_optimize_constants,
+        optimize_probability=nt.optimize_probability,
+        optimizer_iterations=nt.optimizer_iterations,
+        optimizer_nrestarts=nt.optimizer_nrestarts,
+        optimizer_f_calls_limit=nt.optimizer_f_calls_limit,
+        should_simplify=nt.should_simplify,
+        log_file=nt.log_file,
+    )
+    return SkeletonSRConfig(; engine_config=cfg, policy=pysr_policy(options))
 end
 
 fit_pysr_sr(args...; kwargs...) =

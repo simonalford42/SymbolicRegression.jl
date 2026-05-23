@@ -71,39 +71,12 @@ Base.@kwdef mutable struct EngineConfig
     maxsize::Int = 30
     maxdepth::Int = 10
     max_evals::Union{Int, Nothing} = nothing
-    parsimony::Float64 = 0.0
-    tournament_selection_n::Int = 5
-    tournament_selection_p::Float64 = 1.0
-    crossover_probability::Float64 = 0.1
-    skip_mutation_failures::Bool = true
-    use_frequency::Bool = false
-    use_frequency_in_tournament::Bool = false
-    adaptive_parsimony_scaling::Float64 = 0.0
-    annealing::Bool = false
-    alpha::Float64 = 1.0
-    perturbation_factor::Float64 = 0.1
-    probability_negate_constant::Float64 = 0.0
-    migration::Bool = false
-    hof_migration::Bool = false
-    fraction_replaced::Float64 = 0.0
-    fraction_replaced_hof::Float64 = 0.0
-    topn::Int = 10
-    should_optimize_constants::Bool = false
-    optimize_probability::Float64 = 0.0
-    optimizer_iterations::Int = 8
-    optimizer_nrestarts::Int = 1
-    optimizer_f_calls_limit::Union{Int, Nothing} = nothing
-    should_simplify::Bool = false
     binary_operators::Vector{Symbol} = [:+, :-, :*, :/]
     unary_operators::Vector{Symbol} = Symbol[]
     constants::Vector{Float64} = Float64[]
     constraints::Dict{Symbol, Any} = Dict{Symbol, Any}()
     nested_constraints::Dict{Symbol, Any} = Dict{Symbol, Any}()
     random_state::Int = 0
-    # If log_file is a non-empty path, PySR searches append one JSONL
-    # line per archive update recording the cycle, eval_count, progress and full
-    # Pareto frontier. Equations use the internal x0..xN variable names.
-    log_file::String = ""
 end
 
 # Coerce Py (or Julia-native) collections at the Python interop boundary.
@@ -424,7 +397,7 @@ function evaluate_candidate(engine::RegularizedEvolutionEngine, tree::Node)
     end
     mse = _mean((engine.y .- pred) .^ 2)
     complexity = tree_size(tree)
-    cost = (mse / engine.loss_normalization) + engine.cfg.parsimony * complexity
+    cost = mse / engine.loss_normalization
     !isfinite(cost) && return (Inf, Inf, complexity)
     return (mse, cost, complexity)
 end
@@ -447,13 +420,20 @@ function set_constants!(tree::Node, vals::AbstractVector{<:Real})
     end
 end
 
-function optimize_constants(engine::RegularizedEvolutionEngine, member::Individual)
+function optimize_constants(
+    engine::RegularizedEvolutionEngine,
+    member::Individual;
+    parsimony::Float64=0.0,
+    optimizer_iterations::Int=8,
+    optimizer_nrestarts::Int=1,
+    optimizer_f_calls_limit::Union{Int, Nothing}=nothing,
+)
     consts = constant_nodes(member.tree)
     isempty(consts) && return member, 0
     budget = budget_remaining(engine)
     !isnothing(budget) && budget <= 1 && return member, 0
 
-    maxfun = isnothing(engine.cfg.optimizer_f_calls_limit) ? 10_000 : engine.cfg.optimizer_f_calls_limit
+    maxfun = isnothing(optimizer_f_calls_limit) ? 10_000 : optimizer_f_calls_limit
     !isnothing(budget) && (maxfun = min(maxfun, budget))
 
     initial = Float64[n.value for n in consts]
@@ -474,13 +454,13 @@ function optimize_constants(engine::RegularizedEvolutionEngine, member::Individu
     # Build starts: initial + nrestarts perturbed versions.
     starts = Vector{Vector{Float64}}()
     push!(starts, copy(initial))
-    for _ in 1:max(0, engine.cfg.optimizer_nrestarts - 1)
+    for _ in 1:max(0, optimizer_nrestarts - 1)
         noise = Float64[randn(engine.rng) for _ in 1:length(initial)]
         push!(starts, initial .* (1.0 .+ 0.5 .* noise))
     end
 
     opts = Optim.Options(
-        iterations=max(1, engine.cfg.optimizer_iterations),
+        iterations=max(1, optimizer_iterations),
         f_calls_limit=max(1, maxfun),
         g_tol=1e-8,
     )
@@ -504,6 +484,7 @@ function optimize_constants(engine::RegularizedEvolutionEngine, member::Individu
         scored = evaluate_candidate(engine, best_tree)
         if scored !== nothing
             loss, cost, complexity = scored
+            cost += parsimony * complexity
             evals_used = engine.eval_count - evals_before
             return Individual(best_tree, loss, cost, complexity,
                               next_birth!(engine), next_ref!(engine), member.ref), evals_used
@@ -546,27 +527,44 @@ function initialize_population(engine::RegularizedEvolutionEngine)
         push!(pop, Individual(
             ConstNode(_mean(engine.y)),
             fallback_loss,
-            (fallback_loss / engine.loss_normalization) + engine.cfg.parsimony,
+            fallback_loss / engine.loss_normalization,
             1, next_birth!(engine), next_ref!(engine), nothing,
         ))
     end
     return pop
 end
 
-function optimize_and_simplify!(engine::RegularizedEvolutionEngine, population::Vector{Individual})
+function optimize_and_simplify!(
+    engine::RegularizedEvolutionEngine,
+    population::Vector{Individual};
+    parsimony::Float64=0.0,
+    should_simplify::Bool=false,
+    should_optimize_constants::Bool=false,
+    optimize_probability::Float64=0.0,
+    optimizer_iterations::Int=8,
+    optimizer_nrestarts::Int=1,
+    optimizer_f_calls_limit::Union{Int, Nothing}=nothing,
+)
     for i in eachindex(population)
         member = population[i]
-        if engine.cfg.should_simplify
+        if should_simplify
             simplified = simplify_tree(member.tree)
             if valid_tree(engine, simplified)
                 new_complexity = tree_size(simplified)
-                new_cost = (member.loss / engine.loss_normalization) + engine.cfg.parsimony * new_complexity
+                new_cost = (member.loss / engine.loss_normalization) + parsimony * new_complexity
                 member = Individual(simplified, member.loss, new_cost, new_complexity,
                                     member.birth, member.ref, member.parent_ref)
             end
         end
-        if engine.cfg.should_optimize_constants && rand(engine.rng) < engine.cfg.optimize_probability
-            member, _ = optimize_constants(engine, member)
+        if should_optimize_constants && rand(engine.rng) < optimize_probability
+            member, _ = optimize_constants(
+                engine,
+                member;
+                parsimony=parsimony,
+                optimizer_iterations=optimizer_iterations,
+                optimizer_nrestarts=optimizer_nrestarts,
+                optimizer_f_calls_limit=optimizer_f_calls_limit,
+            )
         end
         population[i] = member
     end
@@ -596,6 +594,10 @@ Base.@kwdef struct SkeletonSRPolicy
     mutation::Function
     acceptance::Function
     crossover::Function
+    cycles_per_population::Function
+    should_crossover::Function
+    skip_mutation_failures::Function
+    postprocess_population!::Function
     update_population::Function
     update_state!::Function
 end
@@ -658,13 +660,6 @@ end
 
 has_budget(state::EngineState, _config::SkeletonSRConfig) = has_budget(state.engine)
 
-function cycles_for_population(population::Population, cfg::EngineConfig)
-    return Int(ceil(length(population) / max(1, cfg.tournament_selection_n)))
-end
-
-should_crossover(rng, cfg::EngineConfig, population::Population) =
-    length(population) >= 2 && rand(rng) <= cfg.crossover_probability
-
 function make_individual(tree::Node, _X, _y, state::EngineState, config::SkeletonSRConfig;
                          parent_ref::Union{Int, Nothing}=nothing)
     out = config.policy.loss_function(tree, state, config)
@@ -714,9 +709,8 @@ function fit_skeleton_sr(X_in, y_in, variable_names_in; config::SkeletonSRConfig
                 evolve_cycle!(state, pop_index, X, y, config)
             end
 
-            has_budget(state, config) && optimize_and_simplify_population!(
-                state.populations[pop_index], state, config
-            )
+            has_budget(state, config) &&
+                config.policy.postprocess_population!(state.populations[pop_index], state, config)
             state.completed_population_cycles[pop_index] += 1
             config.policy.update_state!(state.populations, state, config)
             state.populations = config.policy.update_population(
@@ -729,14 +723,13 @@ function fit_skeleton_sr(X_in, y_in, variable_names_in; config::SkeletonSRConfig
 end
 
 function evolve_cycle!(state::EngineState, pop_index::Int, X, y, config::SkeletonSRConfig)
-    cfg = config.engine_config
     policy = config.policy
     population = state.populations[pop_index]
 
-    for _ in 1:cycles_for_population(population, cfg)
+    for _ in 1:policy.cycles_per_population(population, state, config)
         has_budget(state, config) || break
 
-        if should_crossover(state.engine.rng, cfg, population)
+        if policy.should_crossover(population, state, config)
             parent_a = policy.selection(population, state, config)
             parent_b = policy.selection(population, state, config)
             if parent_a === parent_b && length(population) > 1
@@ -750,13 +743,13 @@ function evolve_cycle!(state::EngineState, pop_index::Int, X, y, config::Skeleto
                 child === nothing && return state
                 push!(candidates, child)
             end
-            isempty(candidates) && cfg.skip_mutation_failures && continue
+            isempty(candidates) && policy.skip_mutation_failures(state, config) && continue
             state.populations[pop_index] = policy.survival(population, candidates, state, config)
         else
             parent = policy.selection(population, state, config)
             child_tree = policy.mutation(parent, state, config)
             if child_tree === nothing
-                cfg.skip_mutation_failures && continue
+                policy.skip_mutation_failures(state, config) && continue
                 replacement = spawn_from_existing(state.engine, parent)
                 state.populations[pop_index] = policy.survival(
                     population, [replacement], state, config
@@ -768,7 +761,7 @@ function evolve_cycle!(state::EngineState, pop_index::Int, X, y, config::Skeleto
                     state.populations[pop_index] = policy.survival(
                         population, [child], state, config
                     )
-                elseif !cfg.skip_mutation_failures
+                elseif !policy.skip_mutation_failures(state, config)
                     replacement = spawn_from_existing(state.engine, parent)
                     state.populations[pop_index] = policy.survival(
                         population, [replacement], state, config
