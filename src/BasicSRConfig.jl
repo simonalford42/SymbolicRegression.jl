@@ -16,7 +16,7 @@ using ..SkeletonSR:
     SkeletonSRConfig,
     SkeletonSRPolicy,
     engine_config_from_namedtuple,
-    evaluate_candidate,
+    evaluate_tree,
     fit_skeleton_sr,
     node_string,
     nodes_with_parent,
@@ -71,11 +71,16 @@ function basic_sr_kwargs(; kwargs...)
     return merge(defaults, (; kwargs...))
 end
 
-function basic_loss_function(tree::Node, state::EngineState, _config::SkeletonSRConfig)
-    out = evaluate_candidate(state.engine, tree)
-    out === nothing && return nothing
-    loss, cost, complexity = out
-    return (loss, cost + state.policy_state.options.parsimony * complexity, complexity)
+function basic_loss_function(tree::Node, complexity::Int, state::EngineState, _config::SkeletonSRConfig)
+    engine = state.engine
+    pred = Vector{Float64}(evaluate_tree(tree, engine.X))
+    if length(pred) != length(engine.y) || !all(isfinite.(pred) .& (abs.(pred) .< 1e12))
+        return (Inf, Inf)
+    end
+    loss = sum((engine.y .- pred) .^ 2) / length(engine.y)
+    cost = loss / engine.loss_normalization
+    isfinite(cost) || return (Inf, Inf)
+    return (loss, cost + state.policy_state.options.parsimony * complexity)
 end
 
 function basic_survival(

@@ -388,27 +388,6 @@ valid_tree(engine::EvolutionEngine, tree::Node) =
 
 # ─── Fitness ────────────────────────────────────────────────────────────────
 
-function evaluate_candidate(engine::EvolutionEngine, tree::Node)
-    has_budget(engine) || return nothing
-    engine.eval_count += 1
-    pred = Vector{Float64}(evaluate_tree(tree, engine.X))
-    if length(pred) != length(engine.y) || !all(isfinite.(pred) .& (abs.(pred) .< 1e12))
-        return (Inf, Inf, tree_size(tree))
-    end
-    mse = _mean((engine.y .- pred) .^ 2)
-    complexity = tree_size(tree)
-    cost = mse / engine.loss_normalization
-    !isfinite(cost) && return (Inf, Inf, complexity)
-    return (mse, cost, complexity)
-end
-
-function create_individual(engine::EvolutionEngine, tree::Node; parent_ref::Union{Int, Nothing}=nothing)
-    out = evaluate_candidate(engine, tree)
-    out === nothing && return nothing
-    loss, cost, complexity = out
-    return Individual(tree, loss, cost, complexity, next_birth!(engine), next_ref!(engine), parent_ref)
-end
-
 spawn_from_existing(engine::EvolutionEngine, member::Individual; parent_ref::Union{Int, Nothing}=nothing) =
     Individual(copy(member.tree), member.loss, member.cost, member.complexity, next_birth!(engine), next_ref!(engine), isnothing(parent_ref) ? member.ref : parent_ref)
 
@@ -421,13 +400,14 @@ function set_constants!(tree::Node, vals::AbstractVector{<:Real})
 end
 
 function optimize_constants(
-    engine::EvolutionEngine,
+    state,
+    config,
     member::Individual;
-    parsimony::Float64=0.0,
     optimizer_iterations::Int=8,
     optimizer_nrestarts::Int=1,
     optimizer_f_calls_limit::Union{Int, Nothing}=nothing,
 )
+    engine = state.engine
     consts = constant_nodes(member.tree)
     isempty(consts) && return member, 0
     budget = budget_remaining(engine)
@@ -445,7 +425,9 @@ function optimize_constants(
         has_budget(engine) || return 1e30
         trial = copy(member.tree)
         set_constants!(trial, vals)
-        scored = evaluate_candidate(engine, trial)
+        complexity = tree_size(trial)
+        engine.eval_count += 1
+        scored = config.policy.loss_function(trial, complexity, state, config)
         scored === nothing && return 1e30
         l = scored[1]
         return isfinite(l) ? l : 1e30
@@ -481,10 +463,15 @@ function optimize_constants(
     end
 
     if best_loss < member.loss
-        scored = evaluate_candidate(engine, best_tree)
+        complexity = tree_size(best_tree)
+        if has_budget(engine)
+            engine.eval_count += 1
+            scored = config.policy.loss_function(best_tree, complexity, state, config)
+        else
+            scored = nothing
+        end
         if scored !== nothing
-            loss, cost, complexity = scored
-            cost += parsimony * complexity
+            loss, cost = scored
             evals_used = engine.eval_count - evals_before
             return Individual(best_tree, loss, cost, complexity,
                               next_birth!(engine), next_ref!(engine), member.ref), evals_used
@@ -508,7 +495,8 @@ end
 
 # ─── Main loop ──────────────────────────────────────────────────────────────
 
-function initialize_population(engine::EvolutionEngine)
+function initialize_population(state, config)
+    engine = state.engine
     pop = Individual[]
     init_length = 3
     while length(pop) < engine.cfg.population_size && has_budget(engine)
@@ -519,25 +507,33 @@ function initialize_population(engine::EvolutionEngine)
         if !valid_tree(engine, tree)
             tree = random_tree(engine, min(3, engine.cfg.maxdepth), false)
         end
-        member = create_individual(engine, tree)
+        member = make_individual(tree, engine.X, engine.y, state, config)
         member !== nothing && push!(pop, member)
     end
     if isempty(pop)
-        fallback_loss = _mean((engine.y .- _mean(engine.y)) .^ 2)
-        push!(pop, Individual(
-            ConstNode(_mean(engine.y)),
-            fallback_loss,
-            fallback_loss / engine.loss_normalization,
-            1, next_birth!(engine), next_ref!(engine), nothing,
-        ))
+        tree = ConstNode(_mean(engine.y))
+        member = make_individual(tree, engine.X, engine.y, state, config)
+        if member === nothing
+            push!(pop, Individual(
+                tree,
+                Inf,
+                Inf,
+                tree_size(tree),
+                next_birth!(engine),
+                next_ref!(engine),
+                nothing,
+            ))
+        else
+            push!(pop, member)
+        end
     end
     return pop
 end
 
 function optimize_and_simplify!(
-    engine::EvolutionEngine,
     population::Vector{Individual};
-    parsimony::Float64=0.0,
+    state,
+    config,
     should_simplify::Bool=false,
     should_optimize_constants::Bool=false,
     optimize_probability::Float64=0.0,
@@ -545,22 +541,29 @@ function optimize_and_simplify!(
     optimizer_nrestarts::Int=1,
     optimizer_f_calls_limit::Union{Int, Nothing}=nothing,
 )
+    engine = state.engine
     for i in eachindex(population)
         member = population[i]
         if should_simplify
             simplified = simplify_tree(member.tree)
             if valid_tree(engine, simplified)
                 new_complexity = tree_size(simplified)
-                new_cost = (member.loss / engine.loss_normalization) + parsimony * new_complexity
-                member = Individual(simplified, member.loss, new_cost, new_complexity,
-                                    member.birth, member.ref, member.parent_ref)
+                if has_budget(engine)
+                    engine.eval_count += 1
+                    scored = config.policy.loss_function(simplified, new_complexity, state, config)
+                    if scored !== nothing
+                        loss, cost = scored
+                        member = Individual(simplified, loss, cost, new_complexity,
+                                            member.birth, member.ref, member.parent_ref)
+                    end
+                end
             end
         end
         if should_optimize_constants && rand(engine.rng) < optimize_probability
             member, _ = optimize_constants(
-                engine,
+                state,
+                config,
                 member;
-                parsimony=parsimony,
                 optimizer_iterations=optimizer_iterations,
                 optimizer_nrestarts=optimizer_nrestarts,
                 optimizer_f_calls_limit=optimizer_f_calls_limit,
@@ -653,7 +656,7 @@ end
 
 function initialize_populations!(state::EngineState, _X, _y, _config::SkeletonSRConfig)
     n = max(1, state.engine.cfg.populations)
-    state.populations = [initialize_population(state.engine) for _ in 1:n]
+    state.populations = [initialize_population(state, _config) for _ in 1:n]
     state.completed_population_cycles = zeros(Int, n)
     return nothing
 end
@@ -662,9 +665,12 @@ has_budget(state::EngineState, _config::SkeletonSRConfig) = has_budget(state.eng
 
 function make_individual(tree::Node, _X, _y, state::EngineState, config::SkeletonSRConfig;
                          parent_ref::Union{Int, Nothing}=nothing)
-    out = config.policy.loss_function(tree, state, config)
+    has_budget(state, config) || return nothing
+    complexity = tree_size(tree)
+    state.engine.eval_count += 1
+    out = config.policy.loss_function(tree, complexity, state, config)
     out === nothing && return nothing
-    loss, cost, complexity = out
+    loss, cost = out
     return Individual(
         tree,
         loss,
@@ -777,7 +783,7 @@ end
 function optimize_and_simplify_population!(
     population::Population, state::EngineState, _config::SkeletonSRConfig
 )
-    return optimize_and_simplify!(state.engine, population)
+    return optimize_and_simplify!(population; state=state, config=_config)
 end
 
 function format_result(

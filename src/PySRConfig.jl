@@ -21,7 +21,7 @@ using ..SkeletonSR:
     VarNode,
     append_random_op,
     engine_config_from_namedtuple,
-    evaluate_candidate,
+    evaluate_tree,
     fit_skeleton_sr,
     insert_random_op,
     isleaf,
@@ -400,11 +400,16 @@ function write_hof_log(engine::EvolutionEngine, cycle::Int,
     end
 end
 
-function pysr_mse_loss_function(tree::Node, state::EngineState, _config::SkeletonSRConfig)
-    out = evaluate_candidate(state.engine, tree)
-    out === nothing && return nothing
-    loss, cost, complexity = out
-    return (loss, cost + state.policy_state.options.parsimony * complexity, complexity)
+function pysr_mse_loss_function(tree::Node, complexity::Int, state::EngineState, _config::SkeletonSRConfig)
+    engine = state.engine
+    pred = Vector{Float64}(evaluate_tree(tree, engine.X))
+    if length(pred) != length(engine.y) || !all(isfinite.(pred) .& (abs.(pred) .< 1e12))
+        return (Inf, Inf)
+    end
+    loss = sum((engine.y .- pred) .^ 2) / length(engine.y)
+    cost = loss / engine.loss_normalization
+    isfinite(cost) || return (Inf, Inf)
+    return (loss, cost + state.policy_state.options.parsimony * complexity)
 end
 
 function pysr_subtree_swap_crossover(parent_a::Individual, parent_b::Individual,
@@ -701,9 +706,9 @@ pysr_skip_mutation_failures(state::EngineState, _config::SkeletonSRConfig) =
 function pysr_postprocess_population!(population::Population, state::EngineState, _config::SkeletonSRConfig)
     options = state.policy_state.options
     return optimize_and_simplify!(
-        state.engine,
         population;
-        parsimony=options.parsimony,
+        state=state,
+        config=_config,
         should_simplify=options.should_simplify,
         should_optimize_constants=options.should_optimize_constants,
         optimize_probability=options.optimize_probability,
