@@ -49,7 +49,7 @@ function topk_survive!(population::Vector{Individual}, offspring::Vector{Individ
 end
 
 basic_mse_loss_function(tree::Node, state::EngineState, _config::SkeletonSRConfig) =
-    MS.evaluate_candidate(state.engine, tree)
+    evaluate_candidate(state.engine, tree)
 
 basic_always_accept(
     _parent::Individual, _child::Individual, _state::EngineState, _config::SkeletonSRConfig
@@ -77,7 +77,7 @@ mutable struct BasicSRState <: AbstractPolicyState
     archive_counted_population_cycles::Vector{Int}
 end
 
-function BasicSRState(cfg::MS.EngineConfig)
+function BasicSRState(cfg::EngineConfig)
     return BasicSRState(Individual[], false, zeros(Int, max(1, cfg.populations)))
 end
 
@@ -123,19 +123,19 @@ function basic_sr_kwargs(; kwargs...)
 end
 
 function basic_selection(population::Population, state::EngineState, config::SkeletonSRConfig)
-    idx = MS.simple_tournament_select(population, config.engine_config, state.engine.rng)
+    idx = simple_tournament_select(population, config.engine_config, state.engine.rng)
     return population[idx]
 end
 
 function basic_survival(population::Population, candidates::Vector{Individual},
                         _state::EngineState, config::SkeletonSRConfig)
     output = copy(population)
-    MS.topk_survive!(output, candidates, config.engine_config)
+    topk_survive!(output, candidates, config.engine_config)
     return output
 end
 
 function basic_mutation(parent::Individual, state::EngineState, _config::SkeletonSRConfig)
-    return MS.basic_replace_subtree_mutation(state.engine, parent)
+    return basic_replace_subtree_mutation(state.engine, parent)
 end
 
 init_basic_state(config::SkeletonSRConfig) = BasicSRState(config.engine_config)
@@ -162,7 +162,7 @@ function basic_update_state!(populations::Vector{Population}, state::EngineState
     seen = Set{String}()
     for member in combined
         isfinite(member.loss) || continue
-        key = MS.node_string(member.tree)
+        key = node_string(member.tree)
         key in seen && continue
         push!(seen, key)
         push!(policy_state.archive, copy(member))

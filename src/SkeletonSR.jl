@@ -572,7 +572,6 @@ function optimize_and_simplify!(engine::RegularizedEvolutionEngine, population::
     end
 end
 
-const MS = @__MODULE__
 const Population = Vector{Individual}
 
 # ─── State/config ───────────────────────────────────────────────────────────
@@ -580,7 +579,7 @@ const Population = Vector{Individual}
 abstract type AbstractPolicyState end
 
 mutable struct EngineState{P<:AbstractPolicyState}
-    engine::MS.RegularizedEvolutionEngine
+    engine::RegularizedEvolutionEngine
     populations::Vector{Population}
     policy_state::P
     current_iteration::Int
@@ -602,7 +601,7 @@ Base.@kwdef struct SkeletonSRPolicy
 end
 
 Base.@kwdef struct SkeletonSRConfig
-    engine_config::MS.EngineConfig
+    engine_config::EngineConfig
     policy::SkeletonSRPolicy
 end
 
@@ -611,11 +610,11 @@ result_members(policy_state::AbstractPolicyState) =
     error("No result_members method is defined for $(typeof(policy_state)).")
 
 function engine_config_from_kwargs(; kwargs...)
-    return MS.EngineConfig(; kwargs...)
+    return EngineConfig(; kwargs...)
 end
 
 function engine_config_from_namedtuple(nt::NamedTuple)
-    engine_fields = Set(fieldnames(MS.EngineConfig))
+    engine_fields = Set(fieldnames(EngineConfig))
     kwargs = Dict{Symbol, Any}()
     for key in keys(nt)
         key in engine_fields || continue
@@ -632,12 +631,12 @@ function engine_config_from_namedtuple(nt::NamedTuple)
         end
         kwargs[key] = value
     end
-    return MS.EngineConfig(; kwargs...)
+    return EngineConfig(; kwargs...)
 end
 
 function initialize_state(X, y, variable_names, config::SkeletonSRConfig)
     _ = variable_names
-    eng = MS.RegularizedEvolutionEngine(Matrix{Float64}(X), Float64.(vec(y)), config.engine_config)
+    eng = RegularizedEvolutionEngine(Matrix{Float64}(X), Float64.(vec(y)), config.engine_config)
     policy_state = config.policy.init_state(config)
     return EngineState(
         eng,
@@ -652,18 +651,18 @@ end
 
 function initialize_populations!(state::EngineState, _X, _y, _config::SkeletonSRConfig)
     n = max(1, state.engine.cfg.populations)
-    state.populations = [MS.initialize_population(state.engine) for _ in 1:n]
+    state.populations = [initialize_population(state.engine) for _ in 1:n]
     state.completed_population_cycles = zeros(Int, n)
     return nothing
 end
 
-has_budget(state::EngineState, _config::SkeletonSRConfig) = MS.has_budget(state.engine)
+has_budget(state::EngineState, _config::SkeletonSRConfig) = has_budget(state.engine)
 
-function cycles_for_population(population::Population, cfg::MS.EngineConfig)
+function cycles_for_population(population::Population, cfg::EngineConfig)
     return Int(ceil(length(population) / max(1, cfg.tournament_selection_n)))
 end
 
-should_crossover(rng, cfg::MS.EngineConfig, population::Population) =
+should_crossover(rng, cfg::EngineConfig, population::Population) =
     length(population) >= 2 && rand(rng) <= cfg.crossover_probability
 
 function make_individual(tree::Node, _X, _y, state::EngineState, config::SkeletonSRConfig;
@@ -676,8 +675,8 @@ function make_individual(tree::Node, _X, _y, state::EngineState, config::Skeleto
         loss,
         cost,
         complexity,
-        MS.next_birth!(state.engine),
-        MS.next_ref!(state.engine),
+        next_birth!(state.engine),
+        next_ref!(state.engine),
         parent_ref,
     )
 end
@@ -693,9 +692,9 @@ end
 # ─── Generic engine ─────────────────────────────────────────────────────────
 
 function fit_skeleton_sr(X_in, y_in, variable_names_in; config::SkeletonSRConfig)
-    X = MS.as_matrix(X_in)
-    y = MS.as_vector(y_in)
-    variable_names = MS.as_strings(variable_names_in)
+    X = as_matrix(X_in)
+    y = as_vector(y_in)
+    variable_names = as_strings(variable_names_in)
     state = initialize_state(X, y, variable_names, config)
     initialize_populations!(state, X, y, config)
     config.policy.update_state!(state.populations, state, config)
@@ -758,7 +757,7 @@ function evolve_cycle!(state::EngineState, pop_index::Int, X, y, config::Skeleto
             child_tree = policy.mutation(parent, state, config)
             if child_tree === nothing
                 cfg.skip_mutation_failures && continue
-                replacement = MS.spawn_from_existing(state.engine, parent)
+                replacement = spawn_from_existing(state.engine, parent)
                 state.populations[pop_index] = policy.survival(
                     population, [replacement], state, config
                 )
@@ -770,7 +769,7 @@ function evolve_cycle!(state::EngineState, pop_index::Int, X, y, config::Skeleto
                         population, [child], state, config
                     )
                 elseif !cfg.skip_mutation_failures
-                    replacement = MS.spawn_from_existing(state.engine, parent)
+                    replacement = spawn_from_existing(state.engine, parent)
                     state.populations[pop_index] = policy.survival(
                         population, [replacement], state, config
                     )
@@ -785,7 +784,7 @@ end
 function optimize_and_simplify_population!(
     population::Population, state::EngineState, _config::SkeletonSRConfig
 )
-    return MS.optimize_and_simplify!(state.engine, population)
+    return optimize_and_simplify!(state.engine, population)
 end
 
 function format_result(
@@ -801,7 +800,7 @@ function format_result(
         members = [best]
     end
     for member in sort(members, by=m -> m.complexity)
-        eqn = MS.node_string(member.tree)
+        eqn = node_string(member.tree)
         for i in reverse(eachindex(variable_names))
             eqn = replace(eqn, Regex("\\bx$(i - 1)\\b") => variable_names[i])
         end

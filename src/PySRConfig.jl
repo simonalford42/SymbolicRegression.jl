@@ -334,13 +334,13 @@ function write_hof_log(engine::RegularizedEvolutionEngine, cycle::Int,
 end
 
 pysr_mse_loss_function(tree::Node, state::EngineState, _config::SkeletonSRConfig) =
-    MS.evaluate_candidate(state.engine, tree)
+    evaluate_candidate(state.engine, tree)
 
 function pysr_subtree_swap_crossover(parent_a::Individual, parent_b::Individual,
                                      state::EngineState, _config::SkeletonSRConfig)
     for _attempt in 1:10
-        t1, t2 = MS.pysr_subtree_crossover(state.engine, parent_a.tree, parent_b.tree)
-        MS.valid_tree(state.engine, t1) && MS.valid_tree(state.engine, t2) && return (t1, t2)
+        t1, t2 = pysr_subtree_crossover(state.engine, parent_a.tree, parent_b.tree)
+        valid_tree(state.engine, t1) && valid_tree(state.engine, t2) && return (t1, t2)
     end
     return nothing
 end
@@ -350,7 +350,7 @@ end
 mutable struct PySRState <: AbstractPolicyState
     best_by_complexity::Dict{Int, Individual}
     frontier::Vector{Individual}
-    per_population_stats::Vector{MS.RunningSearchStatistics}
+    per_population_stats::Vector{RunningSearchStatistics}
     current_temperature::Float64
     counted_population_cycles::Vector{Int}
     archive_initialized::Bool
@@ -358,12 +358,12 @@ mutable struct PySRState <: AbstractPolicyState
     last_logged_cycle::Int
 end
 
-function PySRState(cfg::MS.EngineConfig)
+function PySRState(cfg::EngineConfig)
     n = max(1, cfg.populations)
     return PySRState(
         Dict{Int, Individual}(),
         Individual[],
-        [MS.RunningSearchStatistics(cfg.maxsize) for _ in 1:n],
+        [RunningSearchStatistics(cfg.maxsize) for _ in 1:n],
         1.0,
         zeros(Int, n),
         false,
@@ -495,7 +495,7 @@ end
 
 function pysr_selection(population::Population, state::EngineState, config::SkeletonSRConfig)
     stats = current_stats(state)
-    idx = MS.tournament_select(population, stats, config.engine_config, state.engine.rng)
+    idx = tournament_select(population, stats, config.engine_config, state.engine.rng)
     return population[idx]
 end
 
@@ -505,7 +505,7 @@ function pysr_survival(population::Population, candidates::Vector{Individual},
     used = Set{Int}()
     for candidate in candidates
         isempty(output) && break
-        victim = MS.oldest_survival(output, state.engine.rng, used)
+        victim = oldest_survival(output, state.engine.rng, used)
         push!(used, victim)
         output[victim] = candidate
     end
@@ -513,12 +513,12 @@ function pysr_survival(population::Population, candidates::Vector{Individual},
 end
 
 function pysr_mutation(parent::Individual, state::EngineState, _config::SkeletonSRConfig)
-    return MS.pysr_weighted_mutation(state.engine, parent)
+    return pysr_weighted_mutation(state.engine, parent)
 end
 
 function pysr_acceptance(parent::Individual, child::Individual, state::EngineState,
                          _config::SkeletonSRConfig)
-    return MS.accept_candidate(
+    return accept_candidate(
         state.engine, parent, child, current_stats(state), state.policy_state.current_temperature
     )
 end
@@ -546,7 +546,7 @@ function pysr_update_state!(populations::Vector{Population}, state::EngineState{
                 policy_state.best_by_complexity[c] = copy(member)
             end
         end
-        policy_state.frontier = MS.calculate_pareto_frontier_from_dict(
+        policy_state.frontier = calculate_pareto_frontier_from_dict(
             policy_state.best_by_complexity
         )
         for i in archive_pop_indices
@@ -558,7 +558,7 @@ function pysr_update_state!(populations::Vector{Population}, state::EngineState{
                 (state.current_iteration - 1) * length(populations) + (state.current_population - 1) :
                 -1
             if cycle > policy_state.last_logged_cycle
-                MS.write_hof_log(state.engine, cycle, policy_state.frontier)
+                write_hof_log(state.engine, cycle, policy_state.frontier)
                 policy_state.last_logged_cycle = cycle
             end
         end
@@ -567,7 +567,7 @@ function pysr_update_state!(populations::Vector{Population}, state::EngineState{
     cfg = config.engine_config
     stats = current_stats(state)
 
-    MS.normalize!(stats)
+    normalize!(stats)
     if cfg.annealing && cfg.ncycles_per_iteration > 1
         denom = max(1, cfg.ncycles_per_iteration - 1)
         policy_state.current_temperature = 1.0 - (state.current_inner_cycle - 1) / denom
@@ -581,9 +581,9 @@ function pysr_update_state!(populations::Vector{Population}, state::EngineState{
     if completed > policy_state.counted_population_cycles[pop_idx]
         pop = populations[state.current_population]
         for member in pop
-            MS.update_size!(stats, member.complexity)
+            update_size!(stats, member.complexity)
         end
-        MS.move_window!(stats)
+        move_window!(stats)
         policy_state.counted_population_cycles[pop_idx] = completed
     end
     return nothing
@@ -591,7 +591,7 @@ end
 
 function pysr_update_population(policy_state::PySRState, populations::Vector{Population},
                                 state::EngineState, _config::SkeletonSRConfig)
-    MS.pysr_migration(state.engine, populations, state.current_population, policy_state.frontier)
+    pysr_migration(state.engine, populations, state.current_population, policy_state.frontier)
     return populations
 end
 
