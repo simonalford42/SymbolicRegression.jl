@@ -195,7 +195,7 @@ end
 
 # ─── Engine ─────────────────────────────────────────────────────────────────
 
-mutable struct RegularizedEvolutionEngine
+mutable struct EvolutionEngine
     X::Matrix{Float64}
     y::Vector{Float64}
     cfg::EngineConfig
@@ -211,11 +211,11 @@ mutable struct RegularizedEvolutionEngine
     current_temperature::Float64
 end
 
-function RegularizedEvolutionEngine(X::Matrix{Float64}, y::Vector{Float64}, cfg::EngineConfig)
+function EvolutionEngine(X::Matrix{Float64}, y::Vector{Float64}, cfg::EngineConfig)
     rng = Xoshiro(cfg.random_state)
     baseline_loss = _mean((y .- _mean(y)) .^ 2)
     !isfinite(baseline_loss) && (baseline_loss = 1.0)
-    return RegularizedEvolutionEngine(
+    return EvolutionEngine(
         X, y, cfg, rng,
         size(X, 2),
         copy(cfg.binary_operators),
@@ -227,22 +227,22 @@ function RegularizedEvolutionEngine(X::Matrix{Float64}, y::Vector{Float64}, cfg:
     )
 end
 
-function next_birth!(engine::RegularizedEvolutionEngine)
+function next_birth!(engine::EvolutionEngine)
     engine.birth_counter += 1
     return engine.birth_counter
 end
 
-function next_ref!(engine::RegularizedEvolutionEngine)
+function next_ref!(engine::EvolutionEngine)
     engine.ref_counter += 1
     return engine.ref_counter
 end
 
-budget_remaining(engine::RegularizedEvolutionEngine) = isnothing(engine.eval_budget) ? nothing : max(0, engine.eval_budget - engine.eval_count)
-has_budget(engine::RegularizedEvolutionEngine) = isnothing(engine.eval_budget) || engine.eval_count < engine.eval_budget
+budget_remaining(engine::EvolutionEngine) = isnothing(engine.eval_budget) ? nothing : max(0, engine.eval_budget - engine.eval_count)
+has_budget(engine::EvolutionEngine) = isnothing(engine.eval_budget) || engine.eval_count < engine.eval_budget
 
 # ─── Random tree construction ───────────────────────────────────────────────
 
-function random_terminal(engine::RegularizedEvolutionEngine)
+function random_terminal(engine::EvolutionEngine)
     if rand(engine.rng) < 0.5
         return VarNode(rand(engine.rng, 1:engine.n_features))
     elseif !isempty(engine.cfg.constants)
@@ -251,7 +251,7 @@ function random_terminal(engine::RegularizedEvolutionEngine)
     return ConstNode(randn(engine.rng))
 end
 
-function sample_operator_arity(engine::RegularizedEvolutionEngine; max_added_nodes=nothing)
+function sample_operator_arity(engine::EvolutionEngine; max_added_nodes=nothing)
     arities = Int[]
     weights = Float64[]
     if !isempty(engine.unary_ops) && (isnothing(max_added_nodes) || max_added_nodes >= 1)
@@ -265,9 +265,9 @@ function sample_operator_arity(engine::RegularizedEvolutionEngine; max_added_nod
     return weighted_choice(engine.rng, arities, weights)
 end
 
-sample_operator(engine::RegularizedEvolutionEngine, arity::Int) = rand(engine.rng, arity == 1 ? engine.unary_ops : engine.binary_ops)
+sample_operator(engine::EvolutionEngine, arity::Int) = rand(engine.rng, arity == 1 ? engine.unary_ops : engine.binary_ops)
 
-function append_random_op(engine::RegularizedEvolutionEngine, tree::Node; arity=nothing)
+function append_random_op(engine::EvolutionEngine, tree::Node; arity=nothing)
     tree = copy(tree)
     leaves = [(n, p, s) for (n, p, s) in nodes_with_parent(tree) if isleaf(n)]
     isempty(leaves) && return tree
@@ -281,7 +281,7 @@ function append_random_op(engine::RegularizedEvolutionEngine, tree::Node; arity=
     return replace_subtree(tree, parent, side, new_node)
 end
 
-function prepend_random_op(engine::RegularizedEvolutionEngine, tree::Node)
+function prepend_random_op(engine::EvolutionEngine, tree::Node)
     tree = copy(tree)
     arity = sample_operator_arity(engine)
     arity <= 0 && return tree
@@ -292,7 +292,7 @@ function prepend_random_op(engine::RegularizedEvolutionEngine, tree::Node)
         OpNode(op, random_terminal(engine), tree)
 end
 
-function insert_random_op(engine::RegularizedEvolutionEngine, tree::Node)
+function insert_random_op(engine::EvolutionEngine, tree::Node)
     tree = copy(tree)
     nodes = nodes_with_parent(tree)
     isempty(nodes) && return tree
@@ -310,7 +310,7 @@ function insert_random_op(engine::RegularizedEvolutionEngine, tree::Node)
     return replace_subtree(tree, parent, side, wrapped)
 end
 
-function random_tree_fixed_size(engine::RegularizedEvolutionEngine, node_count::Int)
+function random_tree_fixed_size(engine::EvolutionEngine, node_count::Int)
     target = max(1, node_count)
     tree = random_terminal(engine)
     cur_size = 1
@@ -324,7 +324,7 @@ function random_tree_fixed_size(engine::RegularizedEvolutionEngine, node_count::
     return tree
 end
 
-function random_tree(engine::RegularizedEvolutionEngine, max_depth::Int, full::Bool; depth::Int=0)
+function random_tree(engine::EvolutionEngine, max_depth::Int, full::Bool; depth::Int=0)
     depth >= max_depth && return random_terminal(engine)
     !full && depth > 0 && rand(engine.rng) < 0.3 && return random_terminal(engine)
     if !isempty(engine.unary_ops) && rand(engine.rng) < 0.25
@@ -354,7 +354,7 @@ function max_nestedness(node::Node, op::Symbol)
     return depth - is_self
 end
 
-function check_constraints(engine::RegularizedEvolutionEngine, tree::Node)
+function check_constraints(engine::EvolutionEngine, tree::Node)
     constraints = engine.cfg.constraints
     nested = engine.cfg.nested_constraints
     for (node, _, _) in nodes_with_parent(tree)
@@ -381,14 +381,14 @@ function check_constraints(engine::RegularizedEvolutionEngine, tree::Node)
     return true
 end
 
-valid_tree(engine::RegularizedEvolutionEngine, tree::Node) =
+valid_tree(engine::EvolutionEngine, tree::Node) =
     tree_size(tree) <= engine.cfg.maxsize &&
     tree_height(tree) <= engine.cfg.maxdepth &&
     check_constraints(engine, tree)
 
 # ─── Fitness ────────────────────────────────────────────────────────────────
 
-function evaluate_candidate(engine::RegularizedEvolutionEngine, tree::Node)
+function evaluate_candidate(engine::EvolutionEngine, tree::Node)
     has_budget(engine) || return nothing
     engine.eval_count += 1
     pred = Vector{Float64}(evaluate_tree(tree, engine.X))
@@ -402,14 +402,14 @@ function evaluate_candidate(engine::RegularizedEvolutionEngine, tree::Node)
     return (mse, cost, complexity)
 end
 
-function create_individual(engine::RegularizedEvolutionEngine, tree::Node; parent_ref::Union{Int, Nothing}=nothing)
+function create_individual(engine::EvolutionEngine, tree::Node; parent_ref::Union{Int, Nothing}=nothing)
     out = evaluate_candidate(engine, tree)
     out === nothing && return nothing
     loss, cost, complexity = out
     return Individual(tree, loss, cost, complexity, next_birth!(engine), next_ref!(engine), parent_ref)
 end
 
-spawn_from_existing(engine::RegularizedEvolutionEngine, member::Individual; parent_ref::Union{Int, Nothing}=nothing) =
+spawn_from_existing(engine::EvolutionEngine, member::Individual; parent_ref::Union{Int, Nothing}=nothing) =
     Individual(copy(member.tree), member.loss, member.cost, member.complexity, next_birth!(engine), next_ref!(engine), isnothing(parent_ref) ? member.ref : parent_ref)
 
 # ─── Constant optimization ──────────────────────────────────────────────────
@@ -421,7 +421,7 @@ function set_constants!(tree::Node, vals::AbstractVector{<:Real})
 end
 
 function optimize_constants(
-    engine::RegularizedEvolutionEngine,
+    engine::EvolutionEngine,
     member::Individual;
     parsimony::Float64=0.0,
     optimizer_iterations::Int=8,
@@ -508,7 +508,7 @@ end
 
 # ─── Main loop ──────────────────────────────────────────────────────────────
 
-function initialize_population(engine::RegularizedEvolutionEngine)
+function initialize_population(engine::EvolutionEngine)
     pop = Individual[]
     init_length = 3
     while length(pop) < engine.cfg.population_size && has_budget(engine)
@@ -535,7 +535,7 @@ function initialize_population(engine::RegularizedEvolutionEngine)
 end
 
 function optimize_and_simplify!(
-    engine::RegularizedEvolutionEngine,
+    engine::EvolutionEngine,
     population::Vector{Individual};
     parsimony::Float64=0.0,
     should_simplify::Bool=false,
@@ -577,7 +577,7 @@ const Population = Vector{Individual}
 abstract type AbstractPolicyState end
 
 mutable struct EngineState{P<:AbstractPolicyState}
-    engine::RegularizedEvolutionEngine
+    engine::EvolutionEngine
     populations::Vector{Population}
     policy_state::P
     current_iteration::Int
@@ -638,7 +638,7 @@ end
 
 function initialize_state(X, y, variable_names, config::SkeletonSRConfig)
     _ = variable_names
-    eng = RegularizedEvolutionEngine(Matrix{Float64}(X), Float64.(vec(y)), config.engine_config)
+    eng = EvolutionEngine(Matrix{Float64}(X), Float64.(vec(y)), config.engine_config)
     policy_state = config.policy.init_state(config)
     return EngineState(
         eng,

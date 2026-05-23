@@ -13,7 +13,7 @@ using ..SkeletonSR:
     Node,
     OpNode,
     Population,
-    RegularizedEvolutionEngine,
+    EvolutionEngine,
     SkeletonSRConfig,
     SkeletonSRPolicy,
     engine_config_from_namedtuple,
@@ -29,7 +29,7 @@ using ..SkeletonSR:
 
 # ─── Shared policy helpers ───────────────────────────────────────────────────
 
-function basic_random_subtree(engine::RegularizedEvolutionEngine)
+function basic_random_subtree(engine::EvolutionEngine)
     rand(engine.rng) < 0.5 && return random_terminal(engine)
     arity = sample_operator_arity(engine; max_added_nodes=2)
     arity <= 0 && return random_terminal(engine)
@@ -38,7 +38,7 @@ function basic_random_subtree(engine::RegularizedEvolutionEngine)
     return OpNode(op, random_terminal(engine), random_terminal(engine))
 end
 
-function basic_replace_subtree_mutation_tree(engine::RegularizedEvolutionEngine, tree::Node)
+function basic_replace_subtree_mutation_tree(engine::EvolutionEngine, tree::Node)
     tree = copy(tree)
     nodes = nodes_with_parent(tree)
     isempty(nodes) && return tree
@@ -47,7 +47,7 @@ function basic_replace_subtree_mutation_tree(engine::RegularizedEvolutionEngine,
     return replace_subtree(tree, parent, side, subtree)
 end
 
-function basic_replace_subtree_mutation(engine::RegularizedEvolutionEngine, parent::Individual)
+function basic_replace_subtree_mutation(engine::EvolutionEngine, parent::Individual)
     for _attempt in 1:10
         proposal = basic_replace_subtree_mutation_tree(engine, parent.tree)
         valid_tree(engine, proposal) && return proposal

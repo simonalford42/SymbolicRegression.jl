@@ -15,7 +15,7 @@ using ..SkeletonSR:
     Node,
     OpNode,
     Population,
-    RegularizedEvolutionEngine,
+    EvolutionEngine,
     SkeletonSRConfig,
     SkeletonSRPolicy,
     VarNode,
@@ -163,7 +163,7 @@ function oldest_survival(population::Vector{Individual}, rng, exclude_indices::S
 end
 
 function pysr_apply_mutation(
-    engine::RegularizedEvolutionEngine, tree::Node, mutation::Symbol, options::PySROptions
+    engine::EvolutionEngine, tree::Node, mutation::Symbol, options::PySROptions
 )
     tree = copy(tree)
     nodes = nodes_with_parent(tree)
@@ -270,7 +270,7 @@ function pysr_apply_mutation(
     return tree
 end
 
-function pysr_subtree_crossover(engine::RegularizedEvolutionEngine, parent1::Node, parent2::Node)
+function pysr_subtree_crossover(engine::EvolutionEngine, parent1::Node, parent2::Node)
     t1 = copy(parent1)
     t2 = copy(parent2)
     n1 = nodes_with_parent(t1)
@@ -282,7 +282,7 @@ function pysr_subtree_crossover(engine::RegularizedEvolutionEngine, parent1::Nod
     return t1, t2
 end
 
-function pysr_migration(engine::RegularizedEvolutionEngine, populations::Vector{Vector{Individual}},
+function pysr_migration(engine::EvolutionEngine, populations::Vector{Vector{Individual}},
                         pop_idx::Int, dominating::Vector{Individual}, options::PySROptions)
     target = populations[pop_idx]
     isempty(target) && return
@@ -311,7 +311,7 @@ function pysr_migration(engine::RegularizedEvolutionEngine, populations::Vector{
     options.hof_migration && replace_from!(dominating, options.fraction_replaced_hof)
 end
 
-function accept_candidate(engine::RegularizedEvolutionEngine, parent::Individual, child::Individual,
+function accept_candidate(engine::EvolutionEngine, parent::Individual, child::Individual,
                           stats::RunningSearchStatistics, temperature::Float64,
                           options::PySROptions)
     isfinite(child.cost) || return false
@@ -374,7 +374,7 @@ function _json_float(x::Float64)
     return string(x)
 end
 
-function write_hof_log(engine::RegularizedEvolutionEngine, cycle::Int,
+function write_hof_log(engine::EvolutionEngine, cycle::Int,
                        dominating::Vector{Individual}, options::PySROptions)
     path = options.log_file
     isempty(path) && return
@@ -481,7 +481,7 @@ const PYSR_MUTATION_WEIGHTS = Dict{Symbol, Float64}(
 )
 
 function conditioned_pysr_mutation_weights(
-    engine::RegularizedEvolutionEngine, tree::Node, options::PySROptions
+    engine::EvolutionEngine, tree::Node, options::PySROptions
 )
     nodes = nodes_with_parent(tree)
     leaves = leaf_nodes(tree)
@@ -511,7 +511,7 @@ function conditioned_pysr_mutation_weights(
 end
 
 function sample_pysr_mutation_choice(
-    engine::RegularizedEvolutionEngine, tree::Node, options::PySROptions
+    engine::EvolutionEngine, tree::Node, options::PySROptions
 )
     names, w = conditioned_pysr_mutation_weights(engine, tree, options)
     weights = [w[n] for n in names]
@@ -522,7 +522,7 @@ function sample_pysr_mutation_choice(
 end
 
 function pysr_weighted_mutation(
-    engine::RegularizedEvolutionEngine, parent::Individual, options::PySROptions
+    engine::EvolutionEngine, parent::Individual, options::PySROptions
 )
     mutation = sample_pysr_mutation_choice(engine, parent.tree, options)
     for _attempt in 1:10
