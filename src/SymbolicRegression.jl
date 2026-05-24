@@ -1320,5 +1320,6 @@ include("MiniSR.jl")
 include("SkeletonSR.jl")
 include("BasicSRConfig.jl")
 include("PySRConfig.jl")
+include("SRConfig.jl")
 
 end #module SR
