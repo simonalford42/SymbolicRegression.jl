@@ -376,11 +376,12 @@ end
 
 function PySRState(cfg::EngineConfig, options::PySROptions)
     n = max(1, cfg.populations)
+    stats = RunningSearchStatistics(cfg.maxsize)
     return PySRState(
         options,
         Dict{Int, Individual}(),
         Individual[],
-        [RunningSearchStatistics(cfg.maxsize) for _ in 1:n],
+        [stats for _ in 1:n],
         1.0,
         zeros(Int, n),
         false,
