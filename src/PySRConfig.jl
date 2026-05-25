@@ -31,9 +31,11 @@ using ..SkeletonSR:
     node_string,
     nodes_with_parent,
     optimize_and_simplify!,
+    optimize_constants,
     prepend_random_op,
     random_tree_fixed_size,
     replace_subtree,
+    simplify_tree,
     tree_size,
     valid_tree,
     weighted_choice
@@ -167,8 +169,6 @@ function pysr_apply_mutation(
     nodes = nodes_with_parent(tree)
     leaves = leaf_nodes(tree)
     constants = [n for n in leaves if n isa ConstNode]
-    mutation === :do_nothing && return tree
-
     if mutation === :mutate_constant
         if !isempty(constants)
             node = rand(engine.rng, constants)
@@ -258,7 +258,7 @@ function pysr_apply_mutation(
     elseif mutation === :insert_node
         return insert_random_op(engine, tree)
 
-    elseif mutation === :simplify || mutation === :optimize
+    elseif mutation === :do_nothing || mutation === :simplify || mutation === :optimize
         return tree
 
     elseif mutation === :randomize
@@ -464,9 +464,44 @@ function sample_pysr_mutation_choice(
 end
 
 function pysr_weighted_mutation(
-    engine::EvolutionEngine, parent::Individual, options::PySROptions
+    state::EngineState, config::SkeletonSRConfig, parent::Individual, options::PySROptions
 )
+    engine = state.engine
     mutation = sample_pysr_mutation_choice(engine, parent.tree, options)
+    if mutation === :do_nothing
+        return Individual(
+            copy(parent.tree),
+            parent.loss,
+            parent.cost,
+            parent.complexity,
+            next_birth!(engine),
+            next_ref!(engine),
+            parent.ref,
+        )
+    elseif mutation === :simplify
+        tree = simplify_tree(parent.tree)
+        valid_tree(engine, tree) || return nothing
+        return Individual(
+            tree,
+            parent.loss,
+            parent.cost,
+            tree_size(tree),
+            next_birth!(engine),
+            next_ref!(engine),
+            parent.ref,
+        )
+    elseif mutation === :optimize
+        child, _ = optimize_constants(
+            state,
+            config,
+            parent;
+            optimizer_algorithm=options.optimizer_algorithm,
+            optimizer_iterations=options.optimizer_iterations,
+            optimizer_nrestarts=options.optimizer_nrestarts,
+            optimizer_f_calls_limit=options.optimizer_f_calls_limit,
+        )
+        return child
+    end
     for _attempt in 1:10
         proposal = pysr_apply_mutation(engine, parent.tree, mutation, options)
         valid_tree(engine, proposal) && return proposal
@@ -535,7 +570,7 @@ function pysr_survival(population::Population, candidates::Vector{Individual},
 end
 
 function pysr_mutation(parent::Individual, state::EngineState, _config::SkeletonSRConfig)
-    return pysr_weighted_mutation(state.engine, parent, state.policy_state.options)
+    return pysr_weighted_mutation(state, _config, parent, state.policy_state.options)
 end
 
 function pysr_acceptance(parent::Individual, child::Individual, state::EngineState,

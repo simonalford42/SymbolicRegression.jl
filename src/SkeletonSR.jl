@@ -784,14 +784,19 @@ function evolve_cycle!(state::EngineState, pop_index::Int, X, y, config::Skeleto
             state.populations[pop_index] = policy.survival(population, candidates, state, config)
         else
             parent = policy.selection(population, state, config)
-            child_tree = policy.mutation(parent, state, config)
-            if child_tree === nothing
+            child_result = policy.mutation(parent, state, config)
+            if child_result === nothing
                 policy.skip_mutation_failures(state, config) && continue
                 replacement = spawn_from_existing(state.engine, parent)
                 state.populations[pop_index] = policy.survival(
                     population, [replacement], state, config
                 )
+            elseif child_result isa Individual
+                state.populations[pop_index] = policy.survival(
+                    population, [child_result], state, config
+                )
             else
+                child_tree = child_result::Node
                 child = make_individual(child_tree, X, y, state, config; parent_ref=parent.ref)
                 child === nothing && return state
                 if policy.acceptance(parent, child, state, config)
