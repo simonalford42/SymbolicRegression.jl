@@ -288,12 +288,11 @@ function pysr_migration(engine::EvolutionEngine, populations::Vector{Vector{Indi
         (isempty(candidates) || frac <= 0) && return
         n = poisson_sample(engine.rng, max(0.0, length(target) * frac))
         n <= 0 && return
-        n = min(n, length(target))
+        n = min(n, length(candidates), length(target))
         for _ in 1:n
             dst = rand(engine.rng, 1:length(target))
             src = copy(rand(engine.rng, candidates))
             src.birth = next_birth!(engine)
-            src.ref = next_ref!(engine)
             target[dst] = src
         end
     end
