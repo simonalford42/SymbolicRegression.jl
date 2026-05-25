@@ -591,10 +591,7 @@ function pysr_update_state!(populations::Vector{Population}, state::EngineState{
     archive_pop_indices = if !policy_state.archive_initialized
         collect(eachindex(populations))
     else
-        [
-            i for i in eachindex(populations) if
-            state.completed_population_cycles[i] > policy_state.archive_counted_population_cycles[i]
-        ]
+        [state.current_population]
     end
     if !isempty(archive_pop_indices)
         for i in archive_pop_indices, member in populations[i]
