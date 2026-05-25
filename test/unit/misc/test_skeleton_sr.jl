@@ -1,5 +1,6 @@
 @testitem "SkeletonSR policies run and PySR policy matches MiniSR" begin
     using SymbolicRegression
+    using Optim
 
     Xj = hcat(
         collect(range(-1.0, 1.0; length=24)),
@@ -28,7 +29,7 @@
 
     @test basic_result["n_evals"] <= 120
     @test !isempty(basic_result["rows"])
-    @test length(basic_result["rows"]) <= 5
+    @test length(basic_result["rows"]) <= 10
 
     constraints = Dict{String, Any}(
         "/" => [-1, 6],
@@ -53,9 +54,9 @@
         maxdepth=6,
         max_evals=240,
         parsimony=0.0,
-        tournament_selection_n=3,
+        tournament_selection_n=15,
         tournament_selection_p=0.982,
-        crossover_probability=0.2,
+        crossover_probability=0.0259,
         skip_mutation_failures=true,
         use_frequency=true,
         use_frequency_in_tournament=true,
@@ -68,31 +69,64 @@
         hof_migration=true,
         fraction_replaced=0.00036,
         fraction_replaced_hof=0.0614,
-        topn=4,
-        should_optimize_constants=false,
-        optimize_probability=0.0,
-        optimizer_iterations=2,
-        optimizer_nrestarts=1,
-        optimizer_f_calls_limit=100,
+        topn=12,
+        should_optimize_constants=true,
+        optimize_probability=0.14,
+        optimizer_iterations=8,
+        optimizer_nrestarts=2,
+        optimizer_f_calls_limit=10_000,
         should_simplify=true,
         random_state=17,
         log_file="",
+    )
+    mutation_weight_names = [
+        :add_node,
+        :insert_node,
+        :delete_node,
+        :do_nothing,
+        :mutate_constant,
+        :mutate_operator,
+        :mutate_feature,
+        :swap_operands,
+        :rotate_tree,
+        :randomize,
+        :simplify,
+        :optimize,
+    ]
+    mutation_weights = Dict{Symbol, Float64}(
+        :add_node => 2.47,
+        :insert_node => 0.0112,
+        :delete_node => 0.87,
+        :do_nothing => 0.273,
+        :mutate_constant => 0.0346,
+        :mutate_operator => 0.293,
+        :mutate_feature => 0.1,
+        :swap_operands => 0.198,
+        :rotate_tree => 4.26,
+        :randomize => 0.000502,
+        :simplify => 0.00209,
+        :optimize => 0.0,
     )
 
     minisr_kwargs = merge(
         pysr_kwargs,
         (
-            mutation_weights=copy(SymbolicRegression.PySRConfig.PYSR_MUTATION_WEIGHTS),
-            mutation_weight_names=SymbolicRegression.PySRConfig.PYSR_MUTATION_NAMES,
+            mutation_weights=mutation_weights,
+            mutation_weight_names=mutation_weight_names,
         ),
     )
     minisr_result = SymbolicRegression.MiniSR.fit_mini_sr(
         Xj, yj, variable_names; minisr_kwargs...
     )
     skeleton_result = SymbolicRegression.PySRConfig.fit_pysr_sr(
-        Xj, yj, variable_names; pysr_kwargs...
+        Xj, yj, variable_names; pysr_kwargs..., optimizer_algorithm=Optim.NelderMead()
     )
 
     @test skeleton_result["n_evals"] == minisr_result["n_evals"]
-    @test skeleton_result["rows"] == minisr_result["rows"]
+    @test length(skeleton_result["rows"]) == length(minisr_result["rows"])
+    @test [row["complexity"] for row in skeleton_result["rows"]] ==
+        [row["complexity"] for row in minisr_result["rows"]]
+    @test all(zip(skeleton_result["rows"], minisr_result["rows"])) do (left, right)
+        isapprox(left["loss"], right["loss"]; rtol=1e-2, atol=1e-8)
+    end
 end

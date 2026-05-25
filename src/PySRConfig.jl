@@ -2,7 +2,8 @@
 
 module PySRConfig
 
-using Logging: @warn
+using LineSearches: LineSearches
+using Optim: Optim
 using Random: AbstractRNG, rand, randn, randperm
 
 using ..SkeletonSR:
@@ -48,8 +49,6 @@ Base.@kwdef struct PySROptions
     use_frequency::Bool = true
     use_frequency_in_tournament::Bool = true
     adaptive_parsimony_scaling::Float64 = 1040.0
-    annealing::Bool = false
-    alpha::Float64 = 3.17
     perturbation_factor::Float64 = 0.129
     probability_negate_constant::Float64 = 0.00743
     migration::Bool = true
@@ -59,11 +58,11 @@ Base.@kwdef struct PySROptions
     topn::Int = 12
     should_optimize_constants::Bool = true
     optimize_probability::Float64 = 0.14
+    optimizer_algorithm::Any = Optim.BFGS(; linesearch=LineSearches.BackTracking())
     optimizer_iterations::Int = 8
     optimizer_nrestarts::Int = 2
     optimizer_f_calls_limit::Union{Int, Nothing} = 10_000
     should_simplify::Bool = true
-    log_file::String = ""
 end
 
 mutable struct RunningSearchStatistics
@@ -311,15 +310,9 @@ function pysr_migration(engine::EvolutionEngine, populations::Vector{Vector{Indi
 end
 
 function accept_candidate(engine::EvolutionEngine, parent::Individual, child::Individual,
-                          stats::RunningSearchStatistics, temperature::Float64,
-                          options::PySROptions)
+                          stats::RunningSearchStatistics, options::PySROptions)
     isfinite(child.cost) || return false
     prob = 1.0
-    if options.annealing
-        delta = child.cost - parent.cost
-        denom = max(1e-8, temperature * options.alpha)
-        prob *= exp(clamp(-delta / denom, -50.0, 50.0))
-    end
     if options.use_frequency
         old_size = min(max(parent.complexity, 1), engine.cfg.maxsize)
         new_size = min(max(child.complexity, 1), engine.cfg.maxsize)
@@ -343,60 +336,6 @@ function calculate_pareto_frontier_from_dict(hof_by_complexity::Dict{Int, Indivi
         end
     end
     return dominating
-end
-
-function _json_escape(s::AbstractString)
-    buf = IOBuffer()
-    for c in s
-        if c == '"'
-            write(buf, "\\\"")
-        elseif c == '\\'
-            write(buf, "\\\\")
-        elseif c == '\n'
-            write(buf, "\\n")
-        elseif c == '\r'
-            write(buf, "\\r")
-        elseif c == '\t'
-            write(buf, "\\t")
-        elseif c < ' '
-            write(buf, string("\\u", lpad(string(UInt16(c), base=16), 4, '0')))
-        else
-            write(buf, c)
-        end
-    end
-    return String(take!(buf))
-end
-
-function _json_float(x::Float64)
-    if isnan(x); return "NaN"; end
-    if isinf(x); return x > 0 ? "Infinity" : "-Infinity"; end
-    return string(x)
-end
-
-function write_hof_log(engine::EvolutionEngine, cycle::Int,
-                       dominating::Vector{Individual}, options::PySROptions)
-    path = options.log_file
-    isempty(path) && return
-    budget = engine.eval_budget
-    progress = (isnothing(budget) || budget == 0) ? 0.0 : engine.eval_count / budget
-    try
-        open(path, "a") do io
-            write(io, "{\"cycle\":", string(cycle))
-            write(io, ",\"eval_count\":", string(engine.eval_count))
-            write(io, ",\"progress\":", _json_float(progress))
-            write(io, ",\"frontier\":[")
-            for (i, member) in enumerate(dominating)
-                i > 1 && write(io, ",")
-                eqn = node_string(member.tree)
-                write(io, "{\"complexity\":", string(member.complexity))
-                write(io, ",\"loss\":", _json_float(member.loss))
-                write(io, ",\"equation\":\"", _json_escape(eqn), "\"}")
-            end
-            write(io, "]}\n")
-        end
-    catch err
-        @warn "write_hof_log failed" path=path err=err
-    end
 end
 
 function pysr_mse_loss_function(tree::Node, complexity::Int, state::EngineState, _config::SkeletonSRConfig)
@@ -434,7 +373,6 @@ mutable struct PySRState <: AbstractPolicyState
     counted_population_cycles::Vector{Int}
     archive_initialized::Bool
     archive_counted_population_cycles::Vector{Int}
-    last_logged_cycle::Int
 end
 
 function PySRState(cfg::EngineConfig, options::PySROptions)
@@ -448,7 +386,6 @@ function PySRState(cfg::EngineConfig, options::PySROptions)
         zeros(Int, n),
         false,
         zeros(Int, n),
-        -2,
     )
 end
 
@@ -558,8 +495,6 @@ function pysr_kwargs(; kwargs...)
         use_frequency=true,
         use_frequency_in_tournament=true,
         adaptive_parsimony_scaling=1040.0,
-        annealing=false,
-        alpha=3.17,
         perturbation_factor=0.129,
         probability_negate_constant=0.00743,
         migration=true,
@@ -569,6 +504,7 @@ function pysr_kwargs(; kwargs...)
         topn=12,
         should_optimize_constants=true,
         optimize_probability=0.14,
+        optimizer_algorithm=Optim.BFGS(; linesearch=LineSearches.BackTracking()),
         optimizer_iterations=8,
         optimizer_nrestarts=2,
         optimizer_f_calls_limit=10_000,
@@ -609,7 +545,6 @@ function pysr_acceptance(parent::Individual, child::Individual, state::EngineSta
         parent,
         child,
         current_stats(state),
-        state.policy_state.current_temperature,
         state.policy_state.options,
     )
 end
@@ -617,8 +552,6 @@ end
 function pysr_update_state!(populations::Vector{Population}, state::EngineState{PySRState},
                             config::SkeletonSRConfig)
     policy_state = state.policy_state
-    options = policy_state.options
-    was_archive_initialized = policy_state.archive_initialized
     archive_pop_indices = if !policy_state.archive_initialized
         collect(eachindex(populations))
     else
@@ -643,27 +576,12 @@ function pysr_update_state!(populations::Vector{Population}, state::EngineState{
             policy_state.archive_counted_population_cycles[i] = state.completed_population_cycles[i]
         end
         policy_state.archive_initialized = true
-        if !isempty(options.log_file)
-            cycle = was_archive_initialized ?
-                (state.current_iteration - 1) * length(populations) + (state.current_population - 1) :
-                -1
-            if cycle > policy_state.last_logged_cycle
-                write_hof_log(state.engine, cycle, policy_state.archive, options)
-                policy_state.last_logged_cycle = cycle
-            end
-        end
     end
 
-    cfg = config.engine_config
     stats = current_stats(state)
 
     normalize!(stats)
-    if options.annealing && cfg.ncycles_per_iteration > 1
-        denom = max(1, cfg.ncycles_per_iteration - 1)
-        policy_state.current_temperature = 1.0 - (state.current_inner_cycle - 1) / denom
-    else
-        policy_state.current_temperature = 1.0
-    end
+    policy_state.current_temperature = 1.0
     state.engine.current_temperature = clamp(policy_state.current_temperature, 0.0, 1.0)
 
     pop_idx = state.current_population
@@ -712,6 +630,7 @@ function pysr_postprocess_population!(population::Population, state::EngineState
         should_simplify=options.should_simplify,
         should_optimize_constants=options.should_optimize_constants,
         optimize_probability=options.optimize_probability,
+        optimizer_algorithm=options.optimizer_algorithm,
         optimizer_iterations=options.optimizer_iterations,
         optimizer_nrestarts=options.optimizer_nrestarts,
         optimizer_f_calls_limit=options.optimizer_f_calls_limit,
@@ -748,8 +667,6 @@ function pysr_config(; kwargs...)
         use_frequency=nt.use_frequency,
         use_frequency_in_tournament=nt.use_frequency_in_tournament,
         adaptive_parsimony_scaling=nt.adaptive_parsimony_scaling,
-        annealing=nt.annealing,
-        alpha=nt.alpha,
         perturbation_factor=nt.perturbation_factor,
         probability_negate_constant=nt.probability_negate_constant,
         migration=nt.migration,
@@ -759,11 +676,11 @@ function pysr_config(; kwargs...)
         topn=nt.topn,
         should_optimize_constants=nt.should_optimize_constants,
         optimize_probability=nt.optimize_probability,
+        optimizer_algorithm=nt.optimizer_algorithm,
         optimizer_iterations=nt.optimizer_iterations,
         optimizer_nrestarts=nt.optimizer_nrestarts,
         optimizer_f_calls_limit=nt.optimizer_f_calls_limit,
         should_simplify=nt.should_simplify,
-        log_file=nt.log_file,
     )
     return SkeletonSRConfig(; engine_config=cfg, policy=pysr_policy(options))
 end

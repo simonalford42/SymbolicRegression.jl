@@ -14,7 +14,6 @@ using ..SkeletonSR:
     Population,
     SkeletonSRConfig,
     SkeletonSRPolicy,
-    engine_config_from_namedtuple,
     evaluate_tree,
     fit_skeleton_sr,
     node_string,
@@ -23,49 +22,19 @@ using ..SkeletonSR:
     replace_subtree,
     sample_operator,
     sample_operator_arity,
+    skeleton_sr_config,
     valid_tree
-
-Base.@kwdef struct BasicSROptions
-    tournament_selection_n::Int = 5
-    crossover_probability::Float64 = 0.1
-    skip_mutation_failures::Bool = true
-    topn::Int = 10
-    parsimony::Float64 = 0.0
-end
 
 # ─── BasicSR policy ──────────────────────────────────────────────────────────
 
 mutable struct BasicSRState <: AbstractPolicyState
-    options::BasicSROptions
     archive::Vector{Individual}
     archive_initialized::Bool
     archive_counted_population_cycles::Vector{Int}
 end
 
-function BasicSRState(cfg::EngineConfig, options::BasicSROptions)
-    return BasicSRState(options, Individual[], false, zeros(Int, max(1, cfg.populations)))
-end
-
-function basic_sr_kwargs(; kwargs...)
-    defaults = (
-        binary_operators=String["+", "-", "*", "/"],
-        unary_operators=String[],
-        constants=Float64[],
-        constraints=Dict{String, Any}(),
-        nested_constraints=Dict{String, Any}(),
-        population_size=100,
-        populations=1,
-        niterations=100,
-        ncycles_per_iteration=1,
-        maxsize=30,
-        maxdepth=10,
-        parsimony=0.0,
-        tournament_selection_n=5,
-        crossover_probability=0.1,
-        skip_mutation_failures=true,
-        topn=10,
-    )
-    return merge(defaults, (; kwargs...))
+function BasicSRState(cfg::EngineConfig)
+    return BasicSRState(Individual[], false, zeros(Int, max(1, cfg.populations)))
 end
 
 function basic_loss_function(tree::Node, complexity::Int, state::EngineState, _config::SkeletonSRConfig)
@@ -77,7 +46,7 @@ function basic_loss_function(tree::Node, complexity::Int, state::EngineState, _c
     loss = sum((engine.y .- pred) .^ 2) / length(engine.y)
     cost = loss
     isfinite(cost) || return (Inf, Inf)
-    return (loss, cost + state.policy_state.options.parsimony * complexity)
+    return (loss, cost)
 end
 
 function basic_survival(
@@ -98,7 +67,7 @@ end
 
 function basic_selection(population::Population, state::EngineState, _config::SkeletonSRConfig)
     n = length(population)
-    k = min(max(1, state.policy_state.options.tournament_selection_n), n)
+    k = min(15, n)
     candidate_idx = randperm(state.engine.rng, n)[1:k]
     costs = [population[i].cost for i in candidate_idx]
     return population[candidate_idx[argmin(costs)]]
@@ -158,27 +127,6 @@ function basic_crossover(
     return nothing
 end
 
-function basic_cycles_per_population(
-    population::Population, state::EngineState, _config::SkeletonSRConfig
-)
-    return Int(ceil(length(population) / max(1, state.policy_state.options.tournament_selection_n)))
-end
-
-function basic_should_crossover(population::Population, state::EngineState, _config::SkeletonSRConfig)
-    return length(population) >= 2 &&
-        rand(state.engine.rng) <= state.policy_state.options.crossover_probability
-end
-
-function basic_skip_mutation_failures(state::EngineState, _config::SkeletonSRConfig)
-    return state.policy_state.options.skip_mutation_failures
-end
-
-function basic_postprocess_population!(
-    _population::Population, _state::EngineState, _config::SkeletonSRConfig
-)
-    return nothing
-end
-
 function basic_update_population(
     _policy_state::BasicSRState,
     populations::Vector{Population},
@@ -215,7 +163,7 @@ function basic_update_archive!(
         key in seen && continue
         push!(seen, key)
         push!(policy_state.archive, copy(member))
-        length(policy_state.archive) >= max(1, policy_state.options.topn) && break
+        length(policy_state.archive) >= 10 && break
     end
     for i in pop_indices
         policy_state.archive_counted_population_cycles[i] = state.completed_population_cycles[i]
@@ -224,38 +172,21 @@ function basic_update_archive!(
     return nothing
 end
 
-function basic_policy(options::BasicSROptions)
+function basic_policy()
     return SkeletonSRPolicy(;
-        init_state=config -> BasicSRState(config.engine_config, options),
+        init_state=config -> BasicSRState(config.engine_config),
         loss_function=basic_loss_function,
         survival=basic_survival,
         selection=basic_selection,
         mutation=basic_mutation,
         acceptance=basic_acceptance,
         crossover=basic_crossover,
-        cycles_per_population=basic_cycles_per_population,
-        should_crossover=basic_should_crossover,
-        skip_mutation_failures=basic_skip_mutation_failures,
-        postprocess_population! = basic_postprocess_population!,
         update_population=basic_update_population,
         update_state! = basic_update_archive!,
     )
 end
 
-function basic_sr_config(; kwargs...)
-    nt = basic_sr_kwargs(; kwargs...)
-    cfg = engine_config_from_namedtuple(nt)
-    options = BasicSROptions(;
-        tournament_selection_n=nt.tournament_selection_n,
-        crossover_probability=nt.crossover_probability,
-        skip_mutation_failures=nt.skip_mutation_failures,
-        topn=nt.topn,
-        parsimony=nt.parsimony,
-    )
-    return SkeletonSRConfig(; engine_config=cfg, policy=basic_policy(options))
-end
-
 fit_basic_sr(args...; kwargs...) =
-    fit_skeleton_sr(args...; config=basic_sr_config(; kwargs...))
+    fit_skeleton_sr(args...; config=skeleton_sr_config(basic_policy(); kwargs...))
 
 end

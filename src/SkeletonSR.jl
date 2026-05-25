@@ -399,6 +399,7 @@ function optimize_constants(
     state,
     config,
     member::Individual;
+    optimizer_algorithm=Optim.NelderMead(),
     optimizer_iterations::Int=8,
     optimizer_nrestarts::Int=1,
     optimizer_f_calls_limit::Union{Int, Nothing}=nothing,
@@ -417,18 +418,6 @@ function optimize_constants(
     best_loss = member.loss
     evals_before = engine.eval_count
 
-    function obj(vals::AbstractVector)
-        has_budget(engine) || return 1e30
-        trial = copy(member.tree)
-        set_constants!(trial, vals)
-        complexity = tree_size(trial)
-        engine.eval_count += 1
-        scored = config.policy.loss_function(trial, complexity, state, config)
-        scored === nothing && return 1e30
-        l = scored[1]
-        return isfinite(l) ? l : 1e30
-    end
-
     # Build starts: initial + nrestarts perturbed versions.
     starts = Vector{Vector{Float64}}()
     push!(starts, copy(initial))
@@ -437,23 +426,37 @@ function optimize_constants(
         push!(starts, initial .* (1.0 .+ 0.5 .* noise))
     end
 
-    opts = Optim.Options(
+    extra_kws = hasfield(Optim.Options, :show_warnings) ? (; show_warnings=false) : ()
+    opts = Optim.Options(;
         iterations=max(1, optimizer_iterations),
         f_calls_limit=max(1, maxfun),
         g_tol=1e-8,
+        extra_kws...,
     )
     for x0 in starts
         has_budget(engine) || break
+        trial = copy(member.tree)
+        function obj(vals::AbstractVector)
+            has_budget(engine) || return Inf
+            set_constants!(trial, vals)
+            complexity = tree_size(trial)
+            engine.eval_count += 1
+            scored = config.policy.loss_function(trial, complexity, state, config)
+            scored === nothing && return Inf
+            l = scored[1]
+            return isfinite(l) ? l : Inf
+        end
         try
-            result = Optim.optimize(obj, x0, Optim.NelderMead(), opts)
+            result = Optim.optimize(obj, x0, optimizer_algorithm, opts)
             fval = Optim.minimum(result)
             if isfinite(fval) && fval < best_loss
-                trial = copy(member.tree)
-                set_constants!(trial, Optim.minimizer(result))
-                best_tree = trial
+                candidate_tree = copy(member.tree)
+                set_constants!(candidate_tree, Optim.minimizer(result))
+                best_tree = candidate_tree
                 best_loss = fval
             end
-        catch
+        catch err
+            @warn "constant optimization failed" algorithm=typeof(optimizer_algorithm) err=err
             continue
         end
     end
@@ -533,6 +536,7 @@ function optimize_and_simplify!(
     should_simplify::Bool=false,
     should_optimize_constants::Bool=false,
     optimize_probability::Float64=0.0,
+    optimizer_algorithm=Optim.NelderMead(),
     optimizer_iterations::Int=8,
     optimizer_nrestarts::Int=1,
     optimizer_f_calls_limit::Union{Int, Nothing}=nothing,
@@ -544,15 +548,8 @@ function optimize_and_simplify!(
             simplified = simplify_tree(member.tree)
             if valid_tree(engine, simplified)
                 new_complexity = tree_size(simplified)
-                if has_budget(engine)
-                    engine.eval_count += 1
-                    scored = config.policy.loss_function(simplified, new_complexity, state, config)
-                    if scored !== nothing
-                        loss, cost = scored
-                        member = Individual(simplified, loss, cost, new_complexity,
-                                            member.birth, member.ref, member.parent_ref)
-                    end
-                end
+                member = Individual(simplified, member.loss, member.cost, new_complexity,
+                                    member.birth, member.ref, member.parent_ref)
             end
         end
         if should_optimize_constants && rand(engine.rng) < optimize_probability
@@ -560,6 +557,7 @@ function optimize_and_simplify!(
                 state,
                 config,
                 member;
+                optimizer_algorithm=optimizer_algorithm,
                 optimizer_iterations=optimizer_iterations,
                 optimizer_nrestarts=optimizer_nrestarts,
                 optimizer_f_calls_limit=optimizer_f_calls_limit,
@@ -593,10 +591,10 @@ Base.@kwdef struct SkeletonSRPolicy
     mutation::Function
     acceptance::Function
     crossover::Function
-    cycles_per_population::Function
-    should_crossover::Function
-    skip_mutation_failures::Function
-    postprocess_population!::Function
+    cycles_per_population::Function = default_cycles_per_population
+    should_crossover::Function = default_should_crossover
+    skip_mutation_failures::Function = default_skip_mutation_failures
+    postprocess_population!::Function = default_postprocess_population!
     update_population::Function
     update_state!::Function
 end
@@ -607,6 +605,25 @@ Base.@kwdef struct SkeletonSRConfig
 end
 
 engine(state::EngineState) = state.engine
+
+option(policy_state::AbstractPolicyState, name::Symbol, default) =
+    hasproperty(policy_state, name) ? getproperty(policy_state, name) :
+        hasproperty(policy_state, :options) && hasproperty(policy_state.options, name) ?
+        getproperty(policy_state.options, name) :
+        default
+
+default_cycles_per_population(population::Population, state::EngineState, _config) =
+    Int(ceil(length(population) / max(1, option(state.policy_state, :tournament_selection_n, 15))))
+
+default_should_crossover(population::Population, state::EngineState, _config) =
+    length(population) >= 2 &&
+        rand(state.engine.rng) <= option(state.policy_state, :crossover_probability, 0.0259)
+
+default_skip_mutation_failures(state::EngineState, _config) =
+    option(state.policy_state, :skip_mutation_failures, true)
+
+default_postprocess_population!(population::Population, state::EngineState, config) =
+    optimize_and_simplify_population!(population, state, config)
 
 function engine_config_from_kwargs(; kwargs...)
     return EngineConfig(; kwargs...)
@@ -631,6 +648,26 @@ function engine_config_from_namedtuple(nt::NamedTuple)
         kwargs[key] = value
     end
     return EngineConfig(; kwargs...)
+end
+
+function skeleton_sr_config(policy::SkeletonSRPolicy; kwargs...)
+    nt = merge(
+        (
+            binary_operators=String["+", "-", "*", "/"],
+            unary_operators=String["sin", "cos", "exp", "log", "sqrt", "square"],
+            constants=Float64[],
+            constraints=Dict{String, Any}(),
+            nested_constraints=Dict{String, Any}(),
+            population_size=27,
+            populations=31,
+            niterations=100,
+            ncycles_per_iteration=380,
+            maxsize=30,
+            maxdepth=16,
+        ),
+        (; kwargs...),
+    )
+    return SkeletonSRConfig(; engine_config=engine_config_from_namedtuple(nt), policy=policy)
 end
 
 function initialize_state(X, y, variable_names, config::SkeletonSRConfig)
