@@ -505,7 +505,7 @@ function initialize_population(state, config)
     pop = Individual[]
     init_length = 3
     while length(pop) < engine.cfg.population_size && has_budget(engine)
-        tree = random_terminal(engine)
+        tree = ConstNode(0.0)
         for _ in 1:init_length
             tree = append_random_op(engine, tree)
         end
