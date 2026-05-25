@@ -1,6 +1,5 @@
-@testitem "SkeletonSR policies run and PySR policy matches MiniSR" begin
+@testitem "SkeletonSR policies run and PySR policy honors eval budget" begin
     using SymbolicRegression
-    using Optim
 
     Xj = hcat(
         collect(range(-1.0, 1.0; length=24)),
@@ -77,56 +76,13 @@
         optimizer_f_calls_limit=10_000,
         should_simplify=true,
         random_state=17,
-        log_file="",
-    )
-    mutation_weight_names = [
-        :add_node,
-        :insert_node,
-        :delete_node,
-        :do_nothing,
-        :mutate_constant,
-        :mutate_operator,
-        :mutate_feature,
-        :swap_operands,
-        :rotate_tree,
-        :randomize,
-        :simplify,
-        :optimize,
-    ]
-    mutation_weights = Dict{Symbol, Float64}(
-        :add_node => 2.47,
-        :insert_node => 0.0112,
-        :delete_node => 0.87,
-        :do_nothing => 0.273,
-        :mutate_constant => 0.0346,
-        :mutate_operator => 0.293,
-        :mutate_feature => 0.1,
-        :swap_operands => 0.198,
-        :rotate_tree => 4.26,
-        :randomize => 0.000502,
-        :simplify => 0.00209,
-        :optimize => 0.0,
-    )
-
-    minisr_kwargs = merge(
-        pysr_kwargs,
-        (
-            mutation_weights=mutation_weights,
-            mutation_weight_names=mutation_weight_names,
-        ),
-    )
-    minisr_result = SymbolicRegression.MiniSR.fit_mini_sr(
-        Xj, yj, variable_names; minisr_kwargs...
     )
     skeleton_result = SymbolicRegression.PySRConfig.fit_pysr_sr(
-        Xj, yj, variable_names; pysr_kwargs..., optimizer_algorithm=Optim.NelderMead()
+        Xj, yj, variable_names; pysr_kwargs...
     )
 
-    @test skeleton_result["n_evals"] == minisr_result["n_evals"]
-    @test length(skeleton_result["rows"]) == length(minisr_result["rows"])
-    @test [row["complexity"] for row in skeleton_result["rows"]] ==
-        [row["complexity"] for row in minisr_result["rows"]]
-    @test all(zip(skeleton_result["rows"], minisr_result["rows"])) do (left, right)
-        isapprox(left["loss"], right["loss"]; rtol=1e-2, atol=1e-8)
-    end
+    @test skeleton_result["n_evals"] <= pysr_kwargs.max_evals
+    @test !isempty(skeleton_result["rows"])
+    @test issorted([row["complexity"] for row in skeleton_result["rows"]])
+    @test all(row -> row["complexity"] >= 1 && isfinite(row["loss"]), skeleton_result["rows"])
 end

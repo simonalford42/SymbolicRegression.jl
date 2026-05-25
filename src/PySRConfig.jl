@@ -496,6 +496,7 @@ function pysr_weighted_mutation(
             config,
             parent;
             optimizer_algorithm=options.optimizer_algorithm,
+            optimizer_use_newton_for_single_constant=true,
             optimizer_iterations=options.optimizer_iterations,
             optimizer_nrestarts=options.optimizer_nrestarts,
             optimizer_f_calls_limit=options.optimizer_f_calls_limit,
@@ -666,6 +667,7 @@ function pysr_postprocess_population!(population::Population, state::EngineState
         should_optimize_constants=options.should_optimize_constants,
         optimize_probability=options.optimize_probability,
         optimizer_algorithm=options.optimizer_algorithm,
+        optimizer_use_newton_for_single_constant=true,
         optimizer_iterations=options.optimizer_iterations,
         optimizer_nrestarts=options.optimizer_nrestarts,
         optimizer_f_calls_limit=options.optimizer_f_calls_limit,

@@ -3,6 +3,7 @@ module SkeletonSR
 using PythonCall
 using Random
 using Optim
+using LineSearches: LineSearches
 
 _mean(v) = isempty(v) ? 0.0 : sum(v) / length(v)
 
@@ -400,6 +401,7 @@ function optimize_constants(
     config,
     member::Individual;
     optimizer_algorithm=Optim.NelderMead(),
+    optimizer_use_newton_for_single_constant::Bool=false,
     optimizer_iterations::Int=8,
     optimizer_nrestarts::Int=1,
     optimizer_f_calls_limit::Union{Int, Nothing}=nothing,
@@ -421,7 +423,7 @@ function optimize_constants(
     # Build starts: initial + nrestarts perturbed versions.
     starts = Vector{Vector{Float64}}()
     push!(starts, copy(initial))
-    for _ in 1:max(0, optimizer_nrestarts - 1)
+    for _ in 1:max(0, optimizer_nrestarts)
         noise = Float64[randn(engine.rng) for _ in 1:length(initial)]
         push!(starts, initial .* (1.0 .+ 0.5 .* noise))
     end
@@ -433,6 +435,10 @@ function optimize_constants(
         g_tol=1e-8,
         extra_kws...,
     )
+    algorithm =
+        optimizer_use_newton_for_single_constant && length(initial) == 1 ?
+        Optim.Newton(; linesearch=LineSearches.BackTracking()) :
+        optimizer_algorithm
     for x0 in starts
         has_budget(engine) || break
         trial = copy(member.tree)
@@ -447,7 +453,7 @@ function optimize_constants(
             return isfinite(l) ? l : Inf
         end
         try
-            result = Optim.optimize(obj, x0, optimizer_algorithm, opts)
+            result = Optim.optimize(obj, x0, algorithm, opts)
             fval = Optim.minimum(result)
             if isfinite(fval) && fval < best_loss
                 candidate_tree = copy(member.tree)
@@ -456,7 +462,7 @@ function optimize_constants(
                 best_loss = fval
             end
         catch err
-            @warn "constant optimization failed" algorithm=typeof(optimizer_algorithm) err=err
+            @warn "constant optimization failed" algorithm=typeof(algorithm) err=err
             continue
         end
     end
@@ -537,6 +543,7 @@ function optimize_and_simplify!(
     should_optimize_constants::Bool=false,
     optimize_probability::Float64=0.0,
     optimizer_algorithm=Optim.NelderMead(),
+    optimizer_use_newton_for_single_constant::Bool=false,
     optimizer_iterations::Int=8,
     optimizer_nrestarts::Int=1,
     optimizer_f_calls_limit::Union{Int, Nothing}=nothing,
@@ -558,6 +565,7 @@ function optimize_and_simplify!(
                 config,
                 member;
                 optimizer_algorithm=optimizer_algorithm,
+                optimizer_use_newton_for_single_constant=optimizer_use_newton_for_single_constant,
                 optimizer_iterations=optimizer_iterations,
                 optimizer_nrestarts=optimizer_nrestarts,
                 optimizer_f_calls_limit=optimizer_f_calls_limit,
