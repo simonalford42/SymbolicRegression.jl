@@ -601,8 +601,6 @@ Base.@kwdef struct SkeletonSRPolicy
     crossover::Function
     cycles_per_population::Function = default_cycles_per_population
     should_crossover::Function = default_should_crossover
-    skip_mutation_failures::Function = default_skip_mutation_failures
-    postprocess_population!::Function = default_postprocess_population!
     update_population::Function
     update_state!::Function
 end
@@ -626,12 +624,6 @@ default_cycles_per_population(population::Population, state::EngineState, _confi
 default_should_crossover(population::Population, state::EngineState, _config) =
     length(population) >= 2 &&
         rand(state.engine.rng) <= option(state.policy_state, :crossover_probability, 0.0259)
-
-default_skip_mutation_failures(state::EngineState, _config) =
-    option(state.policy_state, :skip_mutation_failures, true)
-
-default_postprocess_population!(population::Population, state::EngineState, config) =
-    optimize_and_simplify_population!(population, state, config)
 
 function engine_config_from_kwargs(; kwargs...)
     return EngineConfig(; kwargs...)
@@ -755,7 +747,7 @@ function fit_skeleton_sr(X_in, y_in, variable_names_in; config::SkeletonSRConfig
             end
 
             has_budget(state, config) &&
-                config.policy.postprocess_population!(state.populations[pop_index], state, config)
+                optimize_and_simplify_population!(state.populations[pop_index], state, config)
             state.completed_population_cycles[pop_index] += 1
             config.policy.update_state!(state.populations, state, config)
             state.populations = config.policy.update_population(
@@ -788,17 +780,13 @@ function evolve_cycle!(state::EngineState, pop_index::Int, X, y, config::Skeleto
                 child === nothing && return state
                 push!(candidates, child)
             end
-            isempty(candidates) && policy.skip_mutation_failures(state, config) && continue
+            isempty(candidates) && continue
             state.populations[pop_index] = policy.survival(population, candidates, state, config)
         else
             parent = policy.selection(population, state, config)
             child_result = policy.mutation(parent, state, config)
             if child_result === nothing
-                policy.skip_mutation_failures(state, config) && continue
-                replacement = spawn_from_existing(state.engine, parent)
-                state.populations[pop_index] = policy.survival(
-                    population, [replacement], state, config
-                )
+                continue
             elseif child_result isa Individual
                 state.populations[pop_index] = policy.survival(
                     population, [child_result], state, config
@@ -811,11 +799,6 @@ function evolve_cycle!(state::EngineState, pop_index::Int, X, y, config::Skeleto
                     state.populations[pop_index] = policy.survival(
                         population, [child], state, config
                     )
-                elseif !policy.skip_mutation_failures(state, config)
-                    replacement = spawn_from_existing(state.engine, parent)
-                    state.populations[pop_index] = policy.survival(
-                        population, [replacement], state, config
-                    )
                 end
             end
         end
@@ -827,7 +810,21 @@ end
 function optimize_and_simplify_population!(
     population::Population, state::EngineState, _config::SkeletonSRConfig
 )
-    return optimize_and_simplify!(population; state=state, config=_config)
+    return optimize_and_simplify!(
+        population;
+        state=state,
+        config=_config,
+        should_simplify=option(state.policy_state, :should_simplify, false),
+        should_optimize_constants=option(state.policy_state, :should_optimize_constants, false),
+        optimize_probability=option(state.policy_state, :optimize_probability, 0.0),
+        optimizer_algorithm=option(state.policy_state, :optimizer_algorithm, Optim.NelderMead()),
+        optimizer_use_newton_for_single_constant=option(
+            state.policy_state, :optimizer_use_newton_for_single_constant, true
+        ),
+        optimizer_iterations=option(state.policy_state, :optimizer_iterations, 8),
+        optimizer_nrestarts=option(state.policy_state, :optimizer_nrestarts, 1),
+        optimizer_f_calls_limit=option(state.policy_state, :optimizer_f_calls_limit, nothing),
+    )
 end
 
 function format_result(

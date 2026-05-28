@@ -30,7 +30,6 @@ using ..SkeletonSR:
     next_ref!,
     node_string,
     nodes_with_parent,
-    optimize_and_simplify!,
     optimize_constants,
     prepend_random_op,
     random_tree_fixed_size,
@@ -47,7 +46,6 @@ Base.@kwdef struct PySROptions
     tournament_selection_n::Int = 15
     tournament_selection_p::Float64 = 0.982
     crossover_probability::Float64 = 0.0259
-    skip_mutation_failures::Bool = true
     use_frequency::Bool = true
     use_frequency_in_tournament::Bool = true
     adaptive_parsimony_scaling::Float64 = 1040.0
@@ -527,7 +525,6 @@ function pysr_kwargs(; kwargs...)
         tournament_selection_n=15,
         tournament_selection_p=0.982,
         crossover_probability=0.0259,
-        skip_mutation_failures=true,
         use_frequency=true,
         use_frequency_in_tournament=true,
         adaptive_parsimony_scaling=1040.0,
@@ -651,26 +648,6 @@ function pysr_should_crossover(population::Population, state::EngineState, _conf
         rand(state.engine.rng) <= state.policy_state.options.crossover_probability
 end
 
-pysr_skip_mutation_failures(state::EngineState, _config::SkeletonSRConfig) =
-    state.policy_state.options.skip_mutation_failures
-
-function pysr_postprocess_population!(population::Population, state::EngineState, _config::SkeletonSRConfig)
-    options = state.policy_state.options
-    return optimize_and_simplify!(
-        population;
-        state=state,
-        config=_config,
-        should_simplify=options.should_simplify,
-        should_optimize_constants=options.should_optimize_constants,
-        optimize_probability=options.optimize_probability,
-        optimizer_algorithm=options.optimizer_algorithm,
-        optimizer_use_newton_for_single_constant=true,
-        optimizer_iterations=options.optimizer_iterations,
-        optimizer_nrestarts=options.optimizer_nrestarts,
-        optimizer_f_calls_limit=options.optimizer_f_calls_limit,
-    )
-end
-
 function pysr_policy(options::PySROptions)
     return SkeletonSRPolicy(;
         init_state=config -> PySRState(config.engine_config, options),
@@ -682,8 +659,6 @@ function pysr_policy(options::PySROptions)
         crossover=pysr_subtree_swap_crossover,
         cycles_per_population=pysr_cycles_per_population,
         should_crossover=pysr_should_crossover,
-        skip_mutation_failures=pysr_skip_mutation_failures,
-        postprocess_population! = pysr_postprocess_population!,
         update_population=pysr_update_population,
         update_state! = pysr_update_state!,
     )
@@ -697,7 +672,6 @@ function pysr_config(; kwargs...)
         tournament_selection_n=nt.tournament_selection_n,
         tournament_selection_p=nt.tournament_selection_p,
         crossover_probability=nt.crossover_probability,
-        skip_mutation_failures=nt.skip_mutation_failures,
         use_frequency=nt.use_frequency,
         use_frequency_in_tournament=nt.use_frequency_in_tournament,
         adaptive_parsimony_scaling=nt.adaptive_parsimony_scaling,

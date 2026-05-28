@@ -56,7 +56,6 @@
         tournament_selection_n=15,
         tournament_selection_p=0.982,
         crossover_probability=0.0259,
-        skip_mutation_failures=true,
         use_frequency=true,
         use_frequency_in_tournament=true,
         adaptive_parsimony_scaling=1040.0,
