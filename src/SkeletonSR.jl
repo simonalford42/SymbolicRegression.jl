@@ -778,7 +778,7 @@ function evolve_cycle!(state::EngineState, pop_index::Int, X, y, config::Skeleto
             for (tree, parent) in zip(trees_from_crossover_result(result), (parent_a, parent_b))
                 child = make_individual(tree, X, y, state, config; parent_ref=parent.ref)
                 child === nothing && return state
-                push!(candidates, child)
+                policy.acceptance(parent, child, state, config) && push!(candidates, child)
             end
             isempty(candidates) && continue
             state.populations[pop_index] = policy.survival(population, candidates, state, config)

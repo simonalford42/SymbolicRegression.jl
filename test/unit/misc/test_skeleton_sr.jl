@@ -85,3 +85,57 @@
     @test issorted([row["complexity"] for row in skeleton_result["rows"]])
     @test all(row -> row["complexity"] >= 1 && isfinite(row["loss"]), skeleton_result["rows"])
 end
+
+@testitem "SkeletonSR applies acceptance to crossover children" begin
+    using SymbolicRegression
+
+    const S = SymbolicRegression.SkeletonSR
+
+    mutable struct RejectCrossoverState <: S.AbstractPolicyState
+        archive::Vector{S.Individual}
+    end
+
+    acceptance_calls = Ref(0)
+    policy = S.SkeletonSRPolicy(;
+        init_state=config -> RejectCrossoverState(S.Individual[]),
+        loss_function=(tree, complexity, state, config) -> (
+            Float64(complexity), Float64(complexity)
+        ),
+        survival=(population, candidates, state, config) -> error(
+            "rejected crossover children should not reach survival"
+        ),
+        selection=(population, state, config) -> population[1],
+        mutation=(parent, state, config) -> error("mutation should not run"),
+        acceptance=(parent, child, state, config) -> begin
+            acceptance_calls[] += 1
+            false
+        end,
+        crossover=(parent_a, parent_b, state, config) -> (S.VarNode(1), S.VarNode(1)),
+        cycles_per_population=(population, state, config) -> 1,
+        should_crossover=(population, state, config) -> true,
+        update_population=(policy_state, populations, state, config) -> populations,
+        update_state! = (populations, state, config) -> nothing,
+    )
+
+    result = S.fit_skeleton_sr(
+        reshape(collect(range(-1.0, 1.0; length=8)), :, 1),
+        collect(range(-1.0, 1.0; length=8)),
+        ["x0"];
+        config=S.skeleton_sr_config(
+            policy;
+            binary_operators=["+"],
+            unary_operators=String[],
+            population_size=2,
+            populations=1,
+            niterations=1,
+            ncycles_per_iteration=1,
+            maxsize=8,
+            maxdepth=4,
+            max_evals=8,
+            random_state=3,
+        ),
+    )
+
+    @test acceptance_calls[] == 2
+    @test !isempty(result["rows"])
+end
