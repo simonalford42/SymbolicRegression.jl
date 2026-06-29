@@ -13,14 +13,17 @@ using Random: rand, randperm
 
 using ..SkeletonSR:
     AbstractPolicyState,
+    ConstNode,
     EngineConfig,
     EngineState,
+    EvolutionEngine,
     Individual,
     Node,
     OpNode,
     Population,
     SkeletonSRConfig,
     SkeletonSRPolicy,
+    VarNode,
     evaluate_tree,
     fit_skeleton_sr,
     node_string,
@@ -30,7 +33,8 @@ using ..SkeletonSR:
     sample_operator,
     sample_operator_arity,
     skeleton_sr_config,
-    valid_tree
+    valid_tree,
+    weighted_choice
 
 # ─── SR policy ──────────────────────────────────────────────────────────────
 
