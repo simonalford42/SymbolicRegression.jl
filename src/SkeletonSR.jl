@@ -72,6 +72,7 @@ Base.@kwdef mutable struct EngineConfig
     maxsize::Int = 30
     maxdepth::Int = 10
     max_evals::Union{Int, Nothing} = nothing
+    timeout_in_seconds::Union{Float64, Nothing} = nothing
     binary_operators::Vector{Symbol} = [:+, :-, :*, :/]
     unary_operators::Vector{Symbol} = Symbol[]
     constants::Vector{Float64} = Float64[]
@@ -208,6 +209,7 @@ mutable struct EvolutionEngine
     ref_counter::Int
     eval_count::Int
     eval_budget::Union{Int, Nothing}
+    start_time::Float64
     current_temperature::Float64
 end
 
@@ -220,6 +222,7 @@ function EvolutionEngine(X::Matrix{Float64}, y::Vector{Float64}, cfg::EngineConf
         copy(cfg.unary_operators),
         0, 0, 0,
         isnothing(cfg.max_evals) ? nothing : max(0, cfg.max_evals),
+        time(),
         1.0,
     )
 end
@@ -235,7 +238,12 @@ function next_ref!(engine::EvolutionEngine)
 end
 
 budget_remaining(engine::EvolutionEngine) = isnothing(engine.eval_budget) ? nothing : max(0, engine.eval_budget - engine.eval_count)
-has_budget(engine::EvolutionEngine) = isnothing(engine.eval_budget) || engine.eval_count < engine.eval_budget
+has_eval_budget(engine::EvolutionEngine) =
+    isnothing(engine.eval_budget) || engine.eval_count < engine.eval_budget
+has_time_budget(engine::EvolutionEngine) =
+    isnothing(engine.cfg.timeout_in_seconds) ||
+    time() - engine.start_time < engine.cfg.timeout_in_seconds
+has_budget(engine::EvolutionEngine) = has_eval_budget(engine) && has_time_budget(engine)
 
 # ─── Random tree construction ───────────────────────────────────────────────
 

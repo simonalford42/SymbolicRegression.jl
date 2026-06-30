@@ -86,6 +86,24 @@
     @test all(row -> row["complexity"] >= 1 && isfinite(row["loss"]), skeleton_result["rows"])
 end
 
+@testitem "SkeletonSR honors its soft timeout budget" begin
+    using SymbolicRegression
+
+    const S = SymbolicRegression.SkeletonSR
+    cfg = S.EngineConfig(;
+        population_size=1,
+        populations=1,
+        niterations=1,
+        ncycles_per_iteration=1,
+        timeout_in_seconds=1.0,
+    )
+    engine = S.EvolutionEngine(zeros(1, 1), zeros(1), cfg)
+
+    @test S.has_budget(engine)
+    engine.start_time -= 2.0
+    @test !S.has_budget(engine)
+end
+
 @testitem "SkeletonSR applies acceptance to crossover children" begin
     using SymbolicRegression
 
