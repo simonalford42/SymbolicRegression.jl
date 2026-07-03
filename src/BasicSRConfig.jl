@@ -31,10 +31,26 @@ mutable struct BasicSRState <: AbstractPolicyState
     archive::Vector{Individual}
     archive_initialized::Bool
     archive_counted_population_cycles::Vector{Int}
+    # Constant-optimization / simplification options (read via `option()` in
+    # optimize_and_simplify_population!). Defaults match PySR.
+    should_simplify::Bool
+    should_optimize_constants::Bool
+    optimize_probability::Float64
+    optimizer_iterations::Int
+    optimizer_nrestarts::Int
 end
 
 function BasicSRState(cfg::EngineConfig)
-    return BasicSRState(Individual[], false, zeros(Int, max(1, cfg.populations)))
+    return BasicSRState(
+        Individual[],
+        false,
+        zeros(Int, max(1, cfg.populations)),
+        true,   # should_simplify
+        true,   # should_optimize_constants
+        0.14,   # optimize_probability
+        8,      # optimizer_iterations
+        2,      # optimizer_nrestarts
+    )
 end
 
 function basic_loss_function(tree::Node, complexity::Int, state::EngineState, _config::SkeletonSRConfig)
